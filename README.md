@@ -62,21 +62,77 @@ python manage.py runserver 0.0.0.0:21114
 ## Docker 部署
 
 镜像由 GitHub Actions 自动构建，同时推送到 GHCR 与 Docker Hub（`linux/amd64` + `linux/arm64`）：
-推送 `main` 更新 `latest`，打 `v*` 标签则生成语义化版本。
-
-```bash
-cp .env.example .env                              # 修改 SECRET_KEY、ALLOWED_HOSTS
-docker compose -f deploy/docker-compose.prod.yaml up -d          # 拉取预构建镜像
-# 或本地构建：
-docker compose -f deploy/docker-compose.prod.yaml up -d --build
-```
-
-镜像地址（任选其一，内容一致）：
+推送 `main` 更新 `latest`，打 `v*` 标签生成语义化版本。
 
 - GHCR：`ghcr.io/yunxilyf/rustdesk-api:latest`
 - Docker Hub：`yunxi666/rustdesk-api:latest`
 
-使用 Docker Hub 时把 `deploy/docker-compose.prod.yaml` 里的 `image` 换成 `yunxi666/rustdesk-api:latest` 即可。
+### 方式一：docker compose（推荐，免构建）
+
+**1. 准备编排文件**
+
+```bash
+mkdir rustdesk-api && cd rustdesk-api
+curl -fsSLO https://raw.githubusercontent.com/yunxilyf/rustdesk-api/main/deploy/docker-compose.quickstart.yml
+mv docker-compose.quickstart.yml docker-compose.yml
+```
+
+**2. 创建 `.env`**
+
+```bash
+cat > .env <<'EOF'
+DEBUG=0
+SECRET_KEY=请替换为随机字符串
+ALLOWED_HOSTS=*
+CSRF_TRUSTED_ORIGINS=http://127.0.0.1:21114
+HTTPS=0
+BEHIND_PROXY=0
+ALLOW_REGISTRATION=0
+EOF
+```
+
+生成随机 `SECRET_KEY`：
+
+```bash
+python -c "import secrets; print(secrets.token_urlsafe(50))"
+```
+
+> 把 `CSRF_TRUSTED_ORIGINS` 改成实际访问地址（IP 或域名，带协议和端口），否则控制台的写操作会被 403。
+> 正式对外用 HTTPS 时，再按 `.env.example` 打开 `HTTPS=1`、`BEHIND_PROXY=1` 并填写域名。
+
+**3. 启动并验证**
+
+```bash
+docker compose up -d
+docker compose ps
+curl http://127.0.0.1:21114/api/health
+```
+
+浏览器打开 `http://<服务器IP>:21114/console/`，首次访问会引导创建管理员账号。
+若需要开放自助注册，把 `.env` 里的 `ALLOW_REGISTRATION` 改为 `1` 后重启容器。
+
+常用命令：
+
+```bash
+docker compose pull && docker compose up -d   # 升级到最新镜像
+docker compose logs -f --tail=100             # 查看日志
+docker compose down                           # 停止（数据保留在 ./data）
+```
+
+数据目录：`./data/db`（SQLite 数据库）、`./data/records`、`./data/logs`。
+备份时复制 `./data/db/db.sqlite3` 即可。
+
+### 方式二：从源码构建
+
+```bash
+git clone https://github.com/yunxilyf/rustdesk-api.git
+cd rustdesk-api
+cp .env.example .env                             # 修改 SECRET_KEY、ALLOWED_HOSTS
+docker compose -f deploy/docker-compose.prod.yaml up -d          # 使用已发布镜像
+# 或本地构建：
+docker compose -f deploy/docker-compose.prod.yaml up -d --build
+```
+
 直接使用 `docker build` 时必须显式指定 `-f deploy/Dockerfile`。
 
 生产环境的 nginx、HTTPS、systemd / gunicorn、备份与升级步骤，见

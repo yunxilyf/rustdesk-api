@@ -34,19 +34,43 @@ Point the RustDesk client's API server to `http://<host>:21114` (ID/relay server
 
 ## Docker
 
+Images are published to GHCR and Docker Hub (amd64 + arm64):
+
+- `ghcr.io/yunxilyf/rustdesk-api:latest`
+- `yunxi666/rustdesk-api:latest`
+
+Quick start with Compose (no build required):
+
 ```bash
+mkdir rustdesk-api && cd rustdesk-api
+curl -fsSLO https://raw.githubusercontent.com/yunxilyf/rustdesk-api/main/deploy/docker-compose.quickstart.yml
+mv docker-compose.quickstart.yml docker-compose.yml
+cat > .env <<'EOF'
+DEBUG=0
+SECRET_KEY=replace-with-a-random-string
+ALLOWED_HOSTS=*
+CSRF_TRUSTED_ORIGINS=http://127.0.0.1:21114
+HTTPS=0
+BEHIND_PROXY=0
+ALLOW_REGISTRATION=0
+EOF
+docker compose up -d
+curl http://127.0.0.1:21114/api/health
+```
+
+Open `http://<host>:21114/console/` to create the first administrator.
+Set `CSRF_TRUSTED_ORIGINS` to the real URL you use, otherwise console writes return 403.
+
+To build from source instead:
+
+```bash
+git clone https://github.com/yunxilyf/rustdesk-api.git
+cd rustdesk-api
 cp .env.example .env
-docker compose -f deploy/docker-compose.prod.yaml up -d          # pull prebuilt image
-# or build locally:
 docker compose -f deploy/docker-compose.prod.yaml up -d --build
 ```
 
-Prebuilt multi-arch images (`linux/amd64`, `linux/arm64`):
-
-- GHCR: `ghcr.io/yunxilyf/rustdesk-api:latest`
-- Docker Hub: `yunxi666/rustdesk-api:latest`
-
-Set `image` in `deploy/docker-compose.prod.yaml` to either one.
+See [docs/deployment.md](docs/deployment.md) for nginx, HTTPS, systemd/gunicorn and backup.
 
 ## Documentation
 

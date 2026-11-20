@@ -1,0 +1,34 @@
+# 快速体验 / 单机部署：使用已发布镜像，无需克隆源码
+# 用法：
+#   1. 新建目录并进入：mkdir rustdesk-api && cd rustdesk-api
+#   2. 保存本文件为 docker-compose.yml
+#   3. 创建 .env（见 README「Docker 部署」）
+#   4. docker compose up -d
+services:
+  rustdesk-api:
+    image: ghcr.io/yunxilyf/rustdesk-api:latest
+    container_name: rustdeskapi
+    restart: unless-stopped
+    ports:
+      - "21114:21114"
+    env_file:
+      - .env
+    environment:
+      - TZ=Asia/Shanghai
+      - PORT=21114
+      - WEB_CONCURRENCY=2
+      - WEB_THREADS=4
+    volumes:
+      - ./data/db:/app/db
+      - ./data/records:/app/records
+      - ./data/logs:/app/logs
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:21114/api/health', timeout=3)"
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
