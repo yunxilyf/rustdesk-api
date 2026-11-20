@@ -1,0 +1,21 @@
+services:
+  rustdesk-api:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    image: ghcr.io/yunxilyf/rustdesk-api:latest
+    container_name: rustdeskapi
+    restart: unless-stopped
+    ports:
+      - "21114:21114"
+    env_file:
+      - ../.env
+    environment:
+      - TZ=Asia/Shanghai
+      - PORT=21114
+      - WEB_CONCURRENCY=2
+      - WEB_THREADS=4
+    volumes:
+      - ../data/db:/app/db
+      - ../data/records:/app/records
+      - ../data/logs:/app/logs

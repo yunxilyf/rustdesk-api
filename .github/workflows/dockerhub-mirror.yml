@@ -1,0 +1,55 @@
+name: Mirror to Docker Hub
+
+on:
+  workflow_dispatch:
+    inputs:
+      tags:
+        description: '要同步的标签，逗号分隔'
+        required: true
+        default: '1.0.0,1.0,latest'
+  release:
+    types: [published]
+
+jobs:
+  mirror:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+
+    steps:
+      - name: 登录 GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: 登录 Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: 解析标签
+        id: tags
+        run: |
+          if [ "${{ github.event_name }}" = "release" ]; then
+            echo "list=${{ github.event.release.tag_name }}" | sed 's/^list=v/list=/' >> "$GITHUB_OUTPUT"
+          else
+            echo "list=${{ inputs.tags }}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: 从 GHCR 复制到 Docker Hub
+        env:
+          SRC: ghcr.io/${{ github.repository }}
+          DST: ${{ secrets.DOCKERHUB_USERNAME }}/rustdesk-api
+        run: |
+          set -euo pipefail
+          IFS=',' read -ra TAGS <<< "${{ steps.tags.outputs.list }}"
+          for tag in "${TAGS[@]}"; do
+            tag="$(echo "$tag" | xargs)"
+            [ -z "$tag" ] && continue
+            echo "==> $SRC:$tag -> $DST:$tag"
+            docker buildx imagetools create --tag "$DST:$tag" "$SRC:$tag"
+          done

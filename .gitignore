@@ -1,0 +1,68 @@
+# Python
+*.pyc
+*.pyo
+*.spec
+*.c
+*.pyd
+*.so
+test.py
+__pycache__
+
+# Documents
+test
+
+
+# Files
+*.bat
+server.ico
+start.py
+
+# Build
+build
+dist
+dist-
+dist_py38
+
+LICENSE.rst
+
+db/*.sqlite3
+!db/.gitkeep
+job2en.py
+
+新建文本文档.txt
+# Frontend
+frontend/node_modules/
+frontend/dist/
+
+# Runtime
+server.log
+
+# 冒烟测试产物
+smoke-server.log
+smoke-report.json
+server.log
+records/
+e2e/node_modules/
+.venv-audit/
+
+# 本地环境配置与运行日志
+.env
+logs/
+db/*-wal
+db/*-shm
+server.err.log
+
+# 迁移/运维临时文件（含服务器凭据，勿入库）
+_migrate/
+_ops/
+
+# collectstatic 产物
+static/admin/
+
+smoke.py
+seed_demo.py
+
+clean_db.py
+console_smoke.py
+
+probe_v2.py

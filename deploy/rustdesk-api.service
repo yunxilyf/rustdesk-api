@@ -1,0 +1,29 @@
+[Unit]
+Description=RustDesk API Server
+After=network.target postgresql.service mysql.service redis.service
+Wants=network-online.target
+
+[Service]
+Type=notify
+User=rustdesk
+Group=rustdesk
+WorkingDirectory=/opt/rustdesk-api-server
+EnvironmentFile=/etc/rustdesk-api.env
+ExecStart=/opt/rustdesk-api-server/.venv/bin/gunicorn \
+    -c deploy/gunicorn.conf.py \
+    rustdesk_server_api.wsgi:application
+ExecReload=/bin/kill -s HUP $MAINPID
+Restart=always
+RestartSec=3
+KillSignal=SIGTERM
+TimeoutStopSec=30
+
+# 加固：只允许写运行目录
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+ReadWritePaths=/opt/rustdesk-api-server /var/log/rustdesk-api
+
+[Install]
+WantedBy=multi-user.target

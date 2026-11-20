@@ -1,0 +1,10 @@
+# 生产部署可选依赖（开发/测试环境不需要装）
+# pip install -r requirements-prod.txt
+
+# WSGI 服务器：Linux 用 gunicorn，Windows 用 waitress（二选一按平台安装）
+gunicorn>=21.2 ; sys_platform != "win32"
+waitress>=3.0 ; sys_platform == "win32"
+
+# Redis 缓存（多进程/多实例部署时登录节流与会话缓存需要）
+redis>=5.0
+django-redis>=5.4

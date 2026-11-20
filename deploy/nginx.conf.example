@@ -1,0 +1,35 @@
+# /etc/nginx/conf.d/rustdesk-api.conf
+# 反代 API + 控制台；静态文件由 nginx 直接提供。
+
+upstream rustdesk_api {
+    server 127.0.0.1:21114;
+    keepalive 32;
+}
+
+server {
+    listen 80;
+    server_name rd.example.com;
+
+    # 录像分片上传：客户端按 8MB 分片，留出余量
+    client_max_body_size 12m;
+
+    location /static/ {
+        alias /opt/rustdesk-api-server/static/;
+        expires 7d;
+        access_log off;
+    }
+
+    location / {
+        proxy_pass http://rustdesk_api;
+        proxy_http_version 1.1;
+        proxy_set_header Connection "";
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_read_timeout 60s;
+    }
+}
+
+# HTTPS 时把 BEHIND_PROXY=1、HTTPS=1 配进 /etc/rustdesk-api.env，
+# 并在 server 块补 listen 443 ssl 与证书路径。
