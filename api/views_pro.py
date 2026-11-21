@@ -19,6 +19,7 @@ import datetime
 from django.conf import settings
 from django.db.models import Q
 from django.http import HttpResponse, JsonResponse
+from django.utils import timezone
 from django.utils.translation import gettext as _
 
 from .tag_colors import normalize_color
@@ -107,8 +108,27 @@ def _body_any(request):
         return None
 
 
+def token_user(token):
+    """校验 token 是否仍有效，返回用户；无效时返回 None。
+
+    旧数据没有 expires_at：首次使用时补写一个完整有效期，让老客户端平滑升级，
+    之后按 expires_at 判断（不再永久有效）。
+    """
+    if not token:
+        return None
+    from .views_front import EFFECTIVE_SECONDS
+
+    now = timezone.now()
+    if token.expires_at is None:
+        token.expires_at = now + datetime.timedelta(seconds=EFFECTIVE_SECONDS)
+        token.save(update_fields=["expires_at"])
+    elif token.expires_at < now:
+        return None
+    return UserProfile.objects.filter(id=token.uid, is_active=True).first()
+
+
 def _auth(request):
-    """返回 (token, user)，未登录时返回 (None, None)。"""
+    """返回 (token, user)，未登录/过期时返回 (None, None)。"""
     auth = request.META.get("HTTP_AUTHORIZATION", "") or ""
     if auth.startswith("Bearer "):
         auth = auth[len("Bearer ") :]
@@ -116,11 +136,9 @@ def _auth(request):
     if not auth:
         return None, None
     token = RustDeskToken.objects.filter(access_token=auth).first()
-    if not token:
-        return None, None
-    user = UserProfile.objects.filter(id=token.uid).first()
+    user = token_user(token)
     if not user:
-        return token, None
+        return None, None
     return token, user
 
 
@@ -681,6 +699,15 @@ def record_upload(request):
     record_dir = str(getattr(settings, "RECORD_ROOT", os.path.join(str(settings.BASE_DIR), "records")))
     os.makedirs(record_dir, exist_ok=True)
     path = os.path.join(record_dir, filename)
+    if typ in ("new", "part", "tail"):
+        # 这个接口没有认证（客户端协议如此），至少给目录设配额，避免被匿名写满磁盘。
+        quota = getattr(settings, "RECORD_MAX_TOTAL_MB", 2048) * 1024 * 1024
+        used = 0
+        for entry in os.scandir(record_dir):
+            if entry.is_file():
+                used += entry.stat().st_size
+        if used >= quota:
+            return JsonResponse({"error": "record storage quota exceeded"}, status=507)
     # 先看 Content-Length，避免把超大请求体读进内存
     try:
         declared = int(request.META.get("CONTENT_LENGTH") or 0)

@@ -147,7 +147,7 @@ class MalformedInputTests(TestCase):
     def test_audit_note_rejects_bad_guid(self):
         from api.tests.utils import client_login
 
-        status, token, data, body = client_login(self.client)
+        status, token, data, body = client_login(self.client, username="mal-user", password="Mal@20260")
         self.assertEqual(status, 200, body)
         status, body = json_call(self.client, "PUT", "/api/audit", {"guid": "abc", "note": "x"}, token=token)
         self.assertEqual(status, 400, body)

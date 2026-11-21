@@ -12,8 +12,8 @@ class RustDeskToken(models.Model):
     uuid = models.CharField(verbose_name=_("uuid"), max_length=60)
     access_token = models.CharField(verbose_name=_("access_token"), max_length=60, blank=True, db_index=True)
     create_time = models.DateTimeField(verbose_name=_("登录时间"), auto_now_add=True)
+    expires_at = models.DateTimeField(verbose_name=_("过期时间"), null=True, blank=True, db_index=True)
 
-    # expire_time = models.DateTimeField(verbose_name='过期时间')
     class Meta:
         ordering = ("-username",)
         verbose_name = "Token"
@@ -24,9 +24,9 @@ class RustDeskToken(models.Model):
 
 
 class RustDeskTokenAdmin(admin.ModelAdmin):
-    list_display = ("username", "uid")
+    list_display = ("username", "uid", "create_time", "expires_at")
     search_fields = ("username", "uid")
-    list_filter = ("create_time",)  # 过滤器
+    list_filter = ("create_time", "expires_at")
 
 
 class RustDeskTag(models.Model):

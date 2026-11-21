@@ -25,6 +25,8 @@
 | POST | `/api/oidc/auth` | `{op,id,uuid,deviceInfo,apiDomain}` | `{code,url}` 或 `{error}` |
 | GET | `/api/oidc/auth-query?code&id&uuid` | 无认证 | `{access_token,type,user{name,info{...},...}}`；`user.info` 为 Rust 侧必填对象 |
 
+**Token 生命周期**：`access_token` 默认 7200 秒（`EFFECTIVE_SECONDS`），服务端记在 `expires_at`；过期后访问受保护接口一律 401。旧库中 `expires_at IS NULL` 的 token 会在首次使用时补写有效期（平滑升级），不会永久有效；心跳只在剩余有效期不足 600 秒时续期（`HEARTBEAT_TOKEN_REFRESH_SECONDS`）。
+
 ## 地址簿（两代协议）
 
 ### 旧版（≤1.4.x / Sciter）
@@ -90,7 +92,7 @@ Peer 字段：`id,hash,password,username,hostname,platform,alias,tags[],note,log
 | 方法 | 路径 | 请求 | 成功响应 |
 |---|---|---|---|
 | POST | `/api/switch-grant` | `{id,switch_code_verifier,timestamp,signature}` | `{accepted:true}`；拒绝时 `{accepted:false,server_time:<unix 秒>}` 供客户端重签一次 |
-| POST | `/api/record?type=new\|part\|tail\|remove&file&offset&length` | 原始字节 body，无认证 | JSON map 且不含 `error` |
+| POST | `/api/record?type=new\|part\|tail\|remove&file&offset&length` | 原始字节 body，无认证（客户端协议如此）；目录受 `RECORD_MAX_TOTAL_MB` 配额保护，超额返回 507 | JSON map 且不含 `error` |
 | POST | `/api/devices/cli` | Bearer，`{id,uuid,user_name?,address_book_name?,device_group_name?,...}` | 空正文（CLI 打印 `Done!`） |
 | POST | `/api/devices/deploy` | Bearer，`{id,uuid,pk}` | `{result:"OK"}` / `ID_TAKEN` / `INVALID_INPUT` / `NOT_ENABLED` |
 

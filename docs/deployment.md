@@ -62,6 +62,7 @@ python -c "import secrets;print('SECRET_KEY='+secrets.token_urlsafe(50))"
 | `LOGIN_LOCK_SECONDS` | `300` | 锁定时长（秒） |
 | `DATABASE_TYPE` | `SQLITE`/`MYSQL`/`POSTGRES` | 连接信息用 `DB_NAME/DB_USER/DB_PASSWORD/DB_HOST/DB_PORT`（兼容旧 `MYSQL_*`） |
 | `RECORD_ROOT` | `/var/lib/rustdesk-api/records` | 录像落盘目录；1.5.x 客户端不上传，可留空卷 |
+| `RECORD_MAX_TOTAL_MB` | `2048` | 录像目录总配额（MB）；`/api/record` 无认证，靠它防止匿名写满磁盘 |
 | `LOG_DIR` | `/var/log/rustdesk-api` | 日志目录，10MB 轮转保留 5 份 |
 
 `DEBUG=0` 时 `manage.py check` 会对默认 `SECRET_KEY`、`ALLOWED_HOSTS=*`

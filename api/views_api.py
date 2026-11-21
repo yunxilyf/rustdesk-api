@@ -74,30 +74,27 @@ def login(request):
     user.deviceInfo = json.dumps(deviceInfo)
     user.save()
 
+    now = datetime.datetime.now()
+    ttl = datetime.timedelta(seconds=EFFECTIVE_SECONDS)
     token = RustDeskToken.objects.filter(Q(uid=user.id) & Q(username=user.username) & Q(rid=user.rid)).first()
-
-    # 检查是否过期
+    if token and token.expires_at is not None and token.expires_at < now:
+        token.delete()
+        token = None
     if token:
-        now_t = datetime.datetime.now()
-        nums = (now_t - token.create_time).seconds if now_t > token.create_time else 0
-        if nums >= EFFECTIVE_SECONDS:
-            token.delete()
-            token = None
-
-    if not token:
+        # 同一账号重新登录：续满有效期，并同步设备 uuid。
+        token.uuid = user.uuid
+        token.expires_at = now + ttl
+        token.save(update_fields=["uuid", "expires_at"])
+    else:
         token = RustDeskToken(
             username=user.username,
             uid=user.id,
             uuid=user.uuid,
             rid=user.rid,
             access_token=getStrMd5(str(time.time()) + salt + username),
+            expires_at=now + ttl,
         )
         token.save()
-        # create_time 语义是「有效期基准点」：登录即给出完整有效期，
-        # 这样客户端首次心跳不必再写一次库（心跳只做按需续期）。
-        RustDeskToken.objects.filter(pk=token.pk).update(
-            create_time=datetime.datetime.now() + datetime.timedelta(seconds=EFFECTIVE_SECONDS)
-        )
 
     result["access_token"] = token.access_token
     result["type"] = "access_token"
@@ -109,7 +106,10 @@ def logout(request):
     if request.method != "POST":
         return JsonResponse({"error": _("请求方式错误！")})
 
-    data = json.loads(request.body.decode() or "{}")
+    try:
+        data = json.loads(request.body.decode() or "{}")
+    except (ValueError, UnicodeDecodeError):
+        return JsonResponse({"error": _("请求体不是合法的 JSON")}, status=400)
     rid = data.get("id", "")
     uuid = data.get("uuid", "")
     user = UserProfile.objects.filter(Q(rid=rid) & Q(uuid=uuid)).first()
@@ -132,7 +132,7 @@ def currentUser(request):
     if access_token.startswith("Bearer "):
         access_token = access_token[len("Bearer ") :]
     token = RustDeskToken.objects.filter(access_token=access_token).first()
-    user = UserProfile.objects.filter(id=token.uid).first() if token else None
+    user = views_pro.token_user(token)
 
     if not user:
         result["error"] = _("未登录或登录已过期")
@@ -151,7 +151,7 @@ def ab(request):
     if access_token.startswith("Bearer "):
         access_token = access_token[len("Bearer ") :]
     token = RustDeskToken.objects.filter(access_token=access_token).first()
-    user = UserProfile.objects.filter(id=token.uid).first() if token else None
+    user = views_pro.token_user(token)
     if not user:
         return JsonResponse({"error": _("未登录或登录已过期")}, status=401)
 
@@ -185,15 +185,28 @@ def ab(request):
         }
         return JsonResponse({"updated_at": datetime.datetime.now(), "data": json.dumps(data)})
 
-    postdata = json.loads(request.body.decode() or "{}")
+    try:
+        postdata = json.loads(request.body.decode() or "{}")
+    except (ValueError, UnicodeDecodeError):
+        return JsonResponse({"error": _("请求体不是合法的 JSON")}, status=400)
+    if not isinstance(postdata, dict):
+        return JsonResponse({"error": _("请求体格式错误")}, status=400)
     data = postdata.get("data", "")
-    data = {} if not data else json.loads(data)
+    try:
+        data = {} if not data else json.loads(data)
+    except (ValueError, TypeError):
+        return JsonResponse({"error": _("data 字段不是合法的 JSON")}, status=400)
+    if not isinstance(data, dict):
+        return JsonResponse({"error": _("data 字段格式错误")}, status=400)
 
     if "tags" in data:
         tagnames = data.get("tags") or []
         tag_colors = data.get("tag_colors") or ""
         if isinstance(tag_colors, str):
-            tag_colors = json.loads(tag_colors) if tag_colors else {}
+            try:
+                tag_colors = json.loads(tag_colors) if tag_colors else {}
+            except ValueError:
+                return JsonResponse({"error": _("tag_colors 不是合法的 JSON")}, status=400)
         ab_obj.tags.all().delete()
         for name in tagnames:
             AddressBookTag.objects.create(ab=ab_obj, name=name, color=normalize_color(tag_colors.get(name, 0), name))
@@ -321,7 +334,12 @@ def heartbeat(request):
     写操作从「每次心跳 2 条 UPDATE」降到「每台设备几分钟 1 条」，
     否则数据库写锁会先于 Python 成为瓶颈。
     """
-    postdata = json.loads(request.body.decode() or "{}")
+    try:
+        postdata = json.loads(request.body.decode() or "{}")
+    except (ValueError, UnicodeDecodeError):
+        return JsonResponse({"error": _("请求体不是合法的 JSON")}, status=400)
+    if not isinstance(postdata, dict):
+        return JsonResponse({"error": _("请求体格式错误")}, status=400)
     rid = str(postdata.get("id", ""))
     uuid = str(postdata.get("uuid", ""))
     now = datetime.datetime.now()
@@ -334,12 +352,13 @@ def heartbeat(request):
         if not last or (now - last).total_seconds() >= settings.HEARTBEAT_DEVICE_TOUCH_SECONDS:
             RustDesDevice.objects.filter(pk=device.pk).update(update_time=now)
 
-    token = RustDeskToken.objects.filter(Q(rid=rid) & Q(uuid=uuid)).only("id", "create_time").first()
+    token = RustDeskToken.objects.filter(Q(rid=rid) & Q(uuid=uuid)).only("id", "expires_at").first()
     if token:
         renew_before = now + datetime.timedelta(seconds=EFFECTIVE_SECONDS - settings.HEARTBEAT_TOKEN_REFRESH_SECONDS)
-        if token.create_time < renew_before:
+        # 旧数据没有 expires_at：心跳时补写，避免老 token 永久有效。
+        if token.expires_at is None or token.expires_at < renew_before:
             RustDeskToken.objects.filter(pk=token.pk).update(
-                create_time=now + datetime.timedelta(seconds=EFFECTIVE_SECONDS)
+                expires_at=now + datetime.timedelta(seconds=EFFECTIVE_SECONDS)
             )
 
     return JsonResponse({"data": _("在线")})
@@ -435,7 +454,15 @@ def audit(request, kind=None):
 
 
 def audit_note(request):
-    """PUT /api/audit，body {guid, note}"""
+    """PUT /api/audit，body {guid, note}；需要 Bearer token。"""
+    if request.method != "PUT":
+        return JsonResponse({"error": _("请求方式错误！")}, status=405)
+    access_token = request.META.get("HTTP_AUTHORIZATION", "")
+    if access_token.startswith("Bearer "):
+        access_token = access_token[len("Bearer ") :]
+    token = RustDeskToken.objects.filter(access_token=access_token).first()
+    if not views_pro.token_user(token):
+        return JsonResponse({"error": _("未登录或登录已过期")}, status=401)
     try:
         postdata = json.loads(request.body.decode() or "{}")
     except (ValueError, UnicodeDecodeError):

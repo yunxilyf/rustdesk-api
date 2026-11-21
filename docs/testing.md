@@ -4,7 +4,7 @@
 
 | 层 | 内容 | 入口 | 用例数 |
 | --- | --- | --- | --- |
-| L1 单元/集成 | Django test runner：客户端契约、控制台 API、权限隔离、安全边界、CSRF、生产配置 | `manage.py test api.tests` | 110 |
+| L1 单元/集成 | Django test runner：客户端契约、控制台 API、权限隔离、安全边界、CSRF、生产配置 | `manage.py test api.tests` | 117 |
 | L2 浏览器 E2E | Playwright：初始化/登录 → 8 个菜单 → 退出，零 JS 错误 | `e2e/console_e2e.js` | 24 |
 
 ## 运行

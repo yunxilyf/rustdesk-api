@@ -173,13 +173,13 @@ docker compose -f deploy/docker-compose.prod.yaml up -d --build
 ## 测试与验收
 
 ```bash
-python manage.py test api.tests -v 1   # 110 项单元 / 集成测试
+python manage.py test api.tests -v 1   # 117 项单元 / 集成测试
 node e2e/console_e2e.js               # 浏览器 E2E（可选，需 Chrome/Chromium）
 ```
 
 | 层 | 入口 | 用例数 | 覆盖 |
 | --- | --- | --- | --- |
-| L1 单元/集成 | `manage.py test api.tests` | 110 | 客户端契约、控制台 API、权限隔离、安全边界、CSRF、心跳写放大 |
+| L1 单元/集成 | `manage.py test api.tests` | 117 | 客户端契约、控制台 API、权限隔离、安全边界、CSRF、心跳写放大 |
 | L2 浏览器 E2E | `e2e/console_e2e.js` | 24 | 初始化/登录 → 菜单导航 → 退出，零 JS 错误 |
 
 CI 执行 `ruff check`、`manage.py check`、`migrate`、`ensure_admin`、`doctor`、`api.tests`，并对 `/api/health` 做冒烟。

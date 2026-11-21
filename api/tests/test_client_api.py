@@ -78,6 +78,13 @@ class ClientLoginTests(TokenedClientMixin, TestCase):
 
 
 class LegacyAddressBookTests(TokenedClientMixin, TestCase):
+    def test_push_rejects_malformed_json(self):
+        status, body = json_call(self.client, "POST", "/api/ab", raw=b"{not json", token=self.token)
+        self.assertEqual(status, 400, body)
+
+        status, body = json_call(self.client, "POST", "/api/ab", {"data": "{not json"}, token=self.token)
+        self.assertEqual(status, 400, body)
+
     def test_legacy_ab_roundtrip(self):
         status, body = json_call(self.client, "GET", "/api/ab", token=self.token)
         self.assertEqual(status, 200, body)
@@ -462,8 +469,16 @@ class AuditTests(TokenedClientMixin, TestCase):
         guid = jload(body)
         self.assertIsInstance(guid, str)
 
-        status, body = json_call(self.client, "PUT", "/api/audit", {"guid": guid, "note": "hello"})
+        status, body = json_call(self.client, "PUT", "/api/audit", {"guid": guid, "note": "hello"}, token=self.token)
         self.assertEqual(status, 200, body)
+
+    def test_audit_note_requires_token(self):
+        status, body = json_call(self.client, "PUT", "/api/audit", {"guid": "1", "note": "x"})
+        self.assertEqual(status, 401, body)
+
+    def test_audit_note_rejects_non_put(self):
+        status, body = json_call(self.client, "POST", "/api/audit", {"guid": "1", "note": "x"}, token=self.token)
+        self.assertEqual(status, 405, body)
 
     def test_file_and_alarm_audit(self):
         status, body = json_call(
@@ -644,13 +659,17 @@ class HeartbeatWriteTests(TokenedClientMixin, TestCase):
         self._beat()  # 首次心跳允许补写（正常情况下也不写）
         device = RustDesDevice.objects.get(rid=CLIENT_RID, uuid=CLIENT_UUID)
         token = RustDeskToken.objects.get(rid=CLIENT_RID, uuid=CLIENT_UUID)
-        device_time, token_time = device.update_time, token.create_time
+        device_time, token_time = device.update_time, token.expires_at
 
         self._beat()
         device.refresh_from_db()
         token.refresh_from_db()
         self.assertEqual(device.update_time, device_time, "设备时间戳不应每 15 秒重写")
-        self.assertEqual(token.create_time, token_time, "token 不应每次心跳都续期")
+        self.assertEqual(token.expires_at, token_time, "token 不应每次心跳都续期")
+
+    def test_heartbeat_rejects_malformed_json(self):
+        status, body = json_call(self.client, "POST", "/api/heartbeat", raw=b"{not json")
+        self.assertEqual(status, 400, body)
 
     def test_heartbeat_follows_rid_when_uuid_changed(self):
         """客户端升级/重装后 uuid 会变；心跳必须仍按 rid 刷新设备，否则永远显示离线。"""
@@ -675,11 +694,41 @@ class HeartbeatWriteTests(TokenedClientMixin, TestCase):
     def test_heartbeat_touches_stale_device_and_token(self):
         stale = timezone.now() - datetime.timedelta(seconds=3600)
         RustDesDevice.objects.filter(rid=CLIENT_RID, uuid=CLIENT_UUID).update(update_time=stale)
-        RustDeskToken.objects.filter(rid=CLIENT_RID, uuid=CLIENT_UUID).update(create_time=stale)
+        RustDeskToken.objects.filter(rid=CLIENT_RID, uuid=CLIENT_UUID).update(expires_at=stale)
 
         self._beat()
 
         device = RustDesDevice.objects.get(rid=CLIENT_RID, uuid=CLIENT_UUID)
         token = RustDeskToken.objects.get(rid=CLIENT_RID, uuid=CLIENT_UUID)
         self.assertGreater(device.update_time, stale)
-        self.assertGreater(token.create_time, timezone.now())
+        self.assertGreater(token.expires_at, timezone.now())
+
+
+class TokenExpiryTests(TokenedClientMixin, TestCase):
+    """token 必须真的过期；旧库里没有 expires_at 的 token 首次使用时平滑升级。"""
+
+    def test_expired_token_is_rejected(self):
+        RustDeskToken.objects.filter(access_token=self.token).update(
+            expires_at=timezone.now() - datetime.timedelta(seconds=1)
+        )
+        status, body = json_call(self.client, "POST", "/api/currentUser", {}, token=self.token)
+        self.assertEqual(status, 401, body)
+        status, body = json_call(self.client, "GET", "/api/ab", token=self.token)
+        self.assertEqual(status, 401, body)
+
+    def test_legacy_token_is_upgraded_on_first_use(self):
+        RustDeskToken.objects.filter(access_token=self.token).update(expires_at=None)
+        status, body = json_call(self.client, "POST", "/api/currentUser", {}, token=self.token)
+        self.assertEqual(status, 200, body)
+        token = RustDeskToken.objects.get(access_token=self.token)
+        self.assertIsNotNone(token.expires_at)
+        self.assertGreater(token.expires_at, timezone.now())
+
+    def test_login_refreshes_existing_token(self):
+        row = RustDeskToken.objects.get(access_token=self.token)
+        RustDeskToken.objects.filter(pk=row.pk).update(expires_at=timezone.now() + datetime.timedelta(seconds=60))
+        status, token, data, body = client_login(self.client)
+        self.assertEqual(status, 200, body)
+        self.assertEqual(RustDeskToken.objects.filter(rid=CLIENT_RID).count(), 1)
+        row.refresh_from_db()
+        self.assertGreater(row.expires_at, timezone.now() + datetime.timedelta(seconds=3600))

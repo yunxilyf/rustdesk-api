@@ -61,6 +61,8 @@ HEARTBEAT_TOKEN_REFRESH_SECONDS = env_int("HEARTBEAT_TOKEN_REFRESH_SECONDS", 600
 DEVICE_ONLINE_SECONDS = env_int("DEVICE_ONLINE_SECONDS", 300)
 # 会话录像存放目录
 RECORD_ROOT = env_str("RECORD_ROOT", os.path.join(str(BASE_DIR), "records"))
+# 录像目录配额（MB）：/api/record 是历史协议，1.5.x 客户端不会上传，这里仅防止匿名请求写满磁盘。
+RECORD_MAX_TOTAL_MB = env_int("RECORD_MAX_TOTAL_MB", 2048)
 
 # 部署在 HTTPS/反向代理后：HTTPS=1 开启安全 Cookie、HSTS 与 SSL 跳转；
 # BEHIND_PROXY=1 时信任 X-Forwarded-Proto（仅供 nginx 等可信代理使用）。
