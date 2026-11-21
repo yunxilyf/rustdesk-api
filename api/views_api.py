@@ -354,7 +354,7 @@ def heartbeat(request):
 
     token = RustDeskToken.objects.filter(Q(rid=rid) & Q(uuid=uuid)).only("id", "expires_at").first()
     if token:
-        renew_before = now + datetime.timedelta(seconds=EFFECTIVE_SECONDS - settings.HEARTBEAT_TOKEN_REFRESH_SECONDS)
+        renew_before = now + datetime.timedelta(seconds=settings.HEARTBEAT_TOKEN_REFRESH_SECONDS)
         # 旧数据没有 expires_at：心跳时补写，避免老 token 永久有效。
         if token.expires_at is None or token.expires_at < renew_before:
             RustDeskToken.objects.filter(pk=token.pk).update(

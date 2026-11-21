@@ -25,7 +25,7 @@
 | POST | `/api/oidc/auth` | `{op,id,uuid,deviceInfo,apiDomain}` | `{code,url}` 或 `{error}` |
 | GET | `/api/oidc/auth-query?code&id&uuid` | 无认证 | `{access_token,type,user{name,info{...},...}}`；`user.info` 为 Rust 侧必填对象 |
 
-**Token 生命周期**：`access_token` 默认 7200 秒（`EFFECTIVE_SECONDS`），服务端记在 `expires_at`；过期后访问受保护接口一律 401。旧库中 `expires_at IS NULL` 的 token 会在首次使用时补写有效期（平滑升级），不会永久有效；心跳只在剩余有效期不足 600 秒时续期（`HEARTBEAT_TOKEN_REFRESH_SECONDS`）。
+**Token 生命周期**：`access_token` 默认 30 天（`TOKEN_TTL_SECONDS`），服务端记在 `expires_at`；过期后访问受保护接口一律 401。旧库中 `expires_at IS NULL` 的 token 会在首次使用时补写有效期（平滑升级），不会永久有效；在线客户端的心跳在剩余不足 24 小时（`HEARTBEAT_TOKEN_REFRESH_SECONDS`）时自动续满，因此正常使用的客户端不会掉登录，只有连续离线超过 30 天才需要重新登录。
 
 ## 地址簿（两代协议）
 

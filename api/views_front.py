@@ -16,7 +16,7 @@ from django.utils.translation import gettext as _
 from api.models import UserProfile
 
 salt = "xiaomo"
-EFFECTIVE_SECONDS = 7200
+EFFECTIVE_SECONDS = getattr(settings, "TOKEN_TTL_SECONDS", 7200)
 
 
 def getStrMd5(s):

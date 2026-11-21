@@ -55,7 +55,10 @@ LOGIN_LOCK_SECONDS = env_int("LOGIN_LOCK_SECONDS", 300)
 # 心跳写放大控制：设备在线时间戳最多每 N 秒写一次；token 只在剩余不足 M 秒时续期。
 # 这两个值直接决定「每台设备每分钟的写库次数」，是支撑大规模设备的关键参数。
 HEARTBEAT_DEVICE_TOUCH_SECONDS = env_int("HEARTBEAT_DEVICE_TOUCH_SECONDS", 120)
-HEARTBEAT_TOKEN_REFRESH_SECONDS = env_int("HEARTBEAT_TOKEN_REFRESH_SECONDS", 600)
+# 客户端 token 有效期（秒），默认 30 天。离线超过该时长才需要重新登录；
+# 在线客户端会在剩余不足 HEARTBEAT_TOKEN_REFRESH_SECONDS 时由心跳自动续期。
+TOKEN_TTL_SECONDS = env_int("TOKEN_TTL_SECONDS", 30 * 24 * 3600)
+HEARTBEAT_TOKEN_REFRESH_SECONDS = env_int("HEARTBEAT_TOKEN_REFRESH_SECONDS", 24 * 3600)
 # 「设备在线」判定窗口：必须大于 HEARTBEAT_DEVICE_TOUCH_SECONDS，
 # 否则两次写库之间设备会被误判成离线（客户端心跳 15 秒一次，但时间戳不是每次都写）。
 DEVICE_ONLINE_SECONDS = env_int("DEVICE_ONLINE_SECONDS", 300)

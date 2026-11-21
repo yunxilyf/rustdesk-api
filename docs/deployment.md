@@ -60,6 +60,8 @@ python -c "import secrets;print('SECRET_KEY='+secrets.token_urlsafe(50))"
 | `ALLOW_REGISTRATION` | `0` | 关闭自助注册，由管理员建号 |
 | `LOGIN_MAX_ATTEMPTS` | `8` | 窗口内失败次数上限 |
 | `LOGIN_LOCK_SECONDS` | `300` | 锁定时长（秒） |
+| `TOKEN_TTL_SECONDS` | `2592000` | 客户端 token 有效期（30 天）；在线客户端心跳自动续期 |
+| `HEARTBEAT_TOKEN_REFRESH_SECONDS` | `86400` | 剩余不足该秒数时续期，避免频繁写库 |
 | `DATABASE_TYPE` | `SQLITE`/`MYSQL`/`POSTGRES` | 连接信息用 `DB_NAME/DB_USER/DB_PASSWORD/DB_HOST/DB_PORT`（兼容旧 `MYSQL_*`） |
 | `RECORD_ROOT` | `/var/lib/rustdesk-api/records` | 录像落盘目录；1.5.x 客户端不上传，可留空卷 |
 | `RECORD_MAX_TOTAL_MB` | `2048` | 录像目录总配额（MB）；`/api/record` 无认证，靠它防止匿名写满磁盘 |
@@ -264,7 +266,7 @@ python manage.py bench_api --threads 16 --seconds 8 --base http://127.0.0.1:2111
 
 - 设备在线时间戳：最多每 `HEARTBEAT_DEVICE_TOUCH_SECONDS`（默认 120 秒）写一次；
   「在线」判定用 `DEVICE_ONLINE_SECONDS`（默认 300 秒），必须明显大于写库间隔，否则设备会在两次写库之间闪成离线；
-- token 续期：剩余有效期不足 `HEARTBEAT_TOKEN_REFRESH_SECONDS`（默认 600 秒）才写；
+- token 续期：剩余有效期不足 `HEARTBEAT_TOKEN_REFRESH_SECONDS`（默认 86400 秒，即 1 天）才写；
 - 综合下来单台设备约 **10 分钟 1 次写库**，而不是每次心跳 2 次；
 - SQLite 自动开启 WAL + busy_timeout（`api/db_pragmas.py`），没有 WAL 时写锁会让心跳直接雪崩。
 
