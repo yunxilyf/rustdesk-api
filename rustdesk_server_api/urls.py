@@ -1,45 +1,24 @@
-"""rustdesk_server_api URL Configuration
+"""RustDesk API Server 的根 URL 配置。
 
-The `urlpatterns` list routes URLs to views. For more information please see:
-    https://docs.djangoproject.com/en/3.1/topics/http/urls/
-Examples:
-Function views
-    1. Add an import:  from my_app import views
-    2. Add a URL to urlpatterns:  path('', views.home, name='home')
-Class-based views
-    1. Add an import:  from other_app.views import Home
-    2. Add a URL to urlpatterns:  path('', Home.as_view(), name='home')
-Including another URLconf
-    1. Import the include() function: from django.urls import include, path
-    2. Add a URL to urlpatterns:  path('blog/', include('blog.urls'))
+- /console/  管理控制台（TDesign 单页应用）
+- /api/      RustDesk 客户端与控制台 JSON 接口
+- /admin/    Django 管理后台
+- /static/   静态资源（collectstatic 产物 + 控制台构建产物）
 """
 
-import django
-from django.contrib import admin
-from django.urls import path
-
-from api.views import index
-from api.console_api import console_index
-
-if django.__version__.split(".")[0] >= "4":
-    from django.urls import re_path as url
-    from django.conf.urls import include
-else:
-    from django.conf.urls import url, include
-from django.views import static  ##新增
 from django.conf import settings
+from django.contrib import admin
+from django.urls import include, path, re_path
+from django.views.static import serve
 
+from api.console_api import console_index
+from api.views import index
 
 urlpatterns = [
     path("i18n/", include("django.conf.urls.i18n")),
     path("admin/", admin.site.urls),
-    url(r"^$", index),
+    path("", index),
     path("console/", console_index),
-    url(r"^api/", include("api.urls")),
-    url(r"^static/(?P<path>.*)$", static.serve, {"document_root": settings.STATIC_ROOT}, name="static"),
+    path("api/", include("api.urls")),
+    re_path(r"^static/(?P<path>.*)$", serve, {"document_root": settings.STATIC_ROOT}),
 ]
-
-from django.conf.urls import static as sc
-
-if not settings.DEBUG:
-    urlpatterns += sc.static(settings.STATIC_URL, document_root=settings.STATIC_ROOT)

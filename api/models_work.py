@@ -159,25 +159,3 @@ class FileLogAdmin(admin.ModelAdmin):
     list_display = ("id", "file", "remote_id", "user_id", "user_ip", "filesize", "direction", "logged_at")
     search_fields = ("file", "remote_id", "user_id", "user_ip")
     list_filter = ("id", "file", "remote_id", "user_id", "user_ip", "filesize", "direction", "logged_at")
-
-
-class ShareLink(models.Model):
-    """分享链接"""
-
-    uid = models.CharField(verbose_name=_("用户ID"), max_length=16)
-    shash = models.CharField(verbose_name=_("链接Key"), max_length=60)
-    peers = models.CharField(verbose_name=_("机器ID列表"), max_length=20)
-    is_used = models.BooleanField(verbose_name=_("是否使用"), default=False)
-    is_expired = models.BooleanField(verbose_name=_("是否过期"), default=False)
-    create_time = models.DateTimeField(verbose_name=_("生成时间"), auto_now_add=True)
-
-    class Meta:
-        ordering = ("-create_time",)
-        verbose_name = _("分享链接")
-        verbose_name_plural = _("链接列表")
-
-
-class ShareLinkAdmin(admin.ModelAdmin):
-    list_display = ("shash", "uid", "peers", "is_used", "is_expired", "create_time")
-    search_fields = ("peers",)
-    list_filter = ("is_used", "uid", "is_expired")

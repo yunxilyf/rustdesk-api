@@ -6,7 +6,7 @@ on:
       tags:
         description: '要同步的标签，逗号分隔'
         required: true
-        default: '1.0.0,1.0,latest'
+        default: 'latest'
   release:
     types: [published]
 

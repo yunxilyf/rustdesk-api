@@ -34,11 +34,6 @@ def index(request):
     return HttpResponseRedirect("/console/")
 
 
-def legacy_redirect(request):
-    """旧地址兼容：一律 302 到新控制台。"""
-    return HttpResponseRedirect("/console/")
-
-
 def user_action(request):
     """仅保留注册/退出两个 POST 动作；页面型 GET 全部跳新控制台。"""
     if request.method != "POST":
