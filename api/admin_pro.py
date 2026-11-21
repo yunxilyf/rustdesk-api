@@ -1,4 +1,3 @@
-# cython:language_level=3
 """新版客户端接口（1.5.x）相关模型的后台管理注册。
 
 旧版模型（RustDeskToken/Tag/Peer/RustDesDevice/ConnLog/FileLog）仍由

@@ -14,7 +14,7 @@ server {
     client_max_body_size 12m;
 
     location /static/ {
-        alias /opt/rustdesk-api-server/static/;
+        alias /opt/rustdesk-api/static/;
         expires 7d;
         access_log off;
     }

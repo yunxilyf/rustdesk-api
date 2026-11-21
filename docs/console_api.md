@@ -43,7 +43,7 @@
 | DELETE | `/api/console/devices/<rid>` | 管理员：解除归属（不删遥测数据） |
 
 `Device` = `{rid, hostname, username, os, cpu, memory, version, update_time, online:bool, owner, owner_id}`
-在线判定：`update_time` 在 120 秒内。
+在线判定：`update_time` 在 `DEVICE_ONLINE_SECONDS`（默认 300 秒）内。
 
 ## 地址簿
 

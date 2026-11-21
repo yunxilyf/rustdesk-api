@@ -42,7 +42,7 @@ python manage.py bench_api --threads 16 --seconds 8
 | --- | --- |
 | 认证 | 登录成功/失败、当前用户、退出失效、坏 token 401、非法 JSON 400 |
 | 登录节流 | 连续失败触发 429「尝试次数过多」，成功登录清零；客户端与控制台两套 scope |
-| 未授权矩阵 | 9 个控制台读接口 + 3 个写接口匿名访问全部 401，且不返回数据 |
+| 未授权矩阵 | 8 个控制台读接口 + 3 个写接口匿名访问全部 401，且不返回数据 |
 | 旧版地址簿 | `/api/ab` GET/POST 往返、无 token 401、空列表不误删 |
 | 新版地址簿 | personal/settings/shared profiles、peers/tags 形状、peer+tag CRUD 全部 200 空正文 |
 | 客户端用户/设备 | `/api/users`、`/api/peers`、`/api/device-group/accessible` 的 `total + data`，`info.{username,device_name,os}` |
@@ -52,7 +52,7 @@ python manage.py bench_api --threads 16 --seconds 8
 | 切换授权 | switch-grant 落库并返回 `accepted` |
 | 控制台多用户 | 管理员看全部；普通用户只看自己设备/地址簿；越权改他人地址簿 403；不能改自己管理员位/删除自己 |
 | 控制台 CRUD | 用户/设备归属/地址簿联系人/标签/分组/成员/日志/统计 |
-| 前端 | 初始化或登录、9 个菜单可达、页面渲染、面包屑、退出登录、无 JS 异常、无控制台错误 |
+| 前端 | 初始化或登录、8 个菜单可达、页面渲染、面包屑、退出登录、无 JS 异常、无控制台错误 |
 | CSRF | 客户端 API 无 token 可调用（豁免）；控制台写接口缺 token 403；`/console/` 下发 csrftoken 后带 token 可登录 |
 | 生产配置 | `DEBUG=False/"False"` 解析、ALLOWED_HOSTS/CACHE_URL 列表与整数解析、`.env` 加载、节流键哈希、`/api/health` 的 db/cache 组合状态、安全响应头 |
 

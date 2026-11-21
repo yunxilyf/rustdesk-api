@@ -1,8 +1,9 @@
 # -*- coding: utf-8 -*-
-"""RustDesk Pro 兼容数据模型。
+"""RustDesk 新版客户端（1.5.x）数据模型。
 
-单独的模块，避免和旧版 models_work.py / models_user.py 混在一起；
-models.py 会 `from .models_pro import *` 把它挂到 app 上。
+与旧版 models_work.py / models_user.py 分开放：这里承载多地址簿、设备分组、
+设备录像与切换授权等新接口所需的数据；models.py 会 `from .models_pro import *`
+把它挂到 app 上。
 """
 
 from django.db import models
@@ -128,7 +129,11 @@ class DeviceGroupPeer(models.Model):
 
 
 class DeviceRecord(models.Model):
-    """会话录像（客户端 POST /api/record 上传）。"""
+    """设备录像上传记录（协议保留：/api/record）。
+
+    1.5.x 客户端不会主动上传录像，控制台也已移除该入口；
+    保留模型是为了协议与历史数据兼容。
+    """
 
     rid = models.CharField(_("RustDesk ID"), max_length=64, db_index=True)
     peer_id = models.CharField(_("对端 ID"), max_length=64, blank=True, default="")

@@ -7,9 +7,9 @@ Wants=network-online.target
 Type=notify
 User=rustdesk
 Group=rustdesk
-WorkingDirectory=/opt/rustdesk-api-server
+WorkingDirectory=/opt/rustdesk-api
 EnvironmentFile=/etc/rustdesk-api.env
-ExecStart=/opt/rustdesk-api-server/.venv/bin/gunicorn \
+ExecStart=/opt/rustdesk-api/.venv/bin/gunicorn \
     -c deploy/gunicorn.conf.py \
     rustdesk_server_api.wsgi:application
 ExecReload=/bin/kill -s HUP $MAINPID
@@ -23,7 +23,7 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=full
 ProtectHome=true
-ReadWritePaths=/opt/rustdesk-api-server /var/log/rustdesk-api
+ReadWritePaths=/opt/rustdesk-api /var/log/rustdesk-api
 
 [Install]
 WantedBy=multi-user.target

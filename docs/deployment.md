@@ -20,7 +20,7 @@ RustDesk 客户端会把 `api-server` 配成 `https://rd.example.com`，客户�
 ## 2. 安装
 
 ```bash
-cd /opt/rustdesk-api-server
+cd /opt/rustdesk-api
 python3 -m venv .venv
 . .venv/bin/activate
 pip install -r requirements.txt
@@ -99,15 +99,15 @@ gunicorn rustdesk_server_api.wsgi:application \
 
 ```ini
 [Unit]
-Description=rustdesk-api-server
+Description=RustDesk API Server
 After=network.target redis-server.service
 
 [Service]
 Type=simple
 User=rustdesk
-WorkingDirectory=/opt/rustdesk-api-server
-EnvironmentFile=/opt/rustdesk-api-server/.env
-ExecStart=/opt/rustdesk-api-server/.venv/bin/gunicorn rustdesk_server_api.wsgi:application \
+WorkingDirectory=/opt/rustdesk-api
+EnvironmentFile=/opt/rustdesk-api/.env
+ExecStart=/opt/rustdesk-api/.venv/bin/gunicorn rustdesk_server_api.wsgi:application \
   --bind 127.0.0.1:21114 --workers 4 --timeout 60
 Restart=always
 RestartSec=3
@@ -143,7 +143,7 @@ server {
     client_max_body_size 12m;          # 录像分片 8MB，留余量
 
     location /static/ {
-        alias /opt/rustdesk-api-server/static/;
+        alias /opt/rustdesk-api/static/;
         expires 7d;
     }
 

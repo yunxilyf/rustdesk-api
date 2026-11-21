@@ -43,8 +43,8 @@ CSRF_TRUSTED_ORIGINS = env_list(
 SECURE_CROSS_ORIGIN_OPENER_POLICY = "None" if DEBUG else "same-origin"
 AUTH_USER_MODEL = "api.UserProfile"  # AppName.自定义user
 
-ALLOW_REGISTRATION = os.environ.get("ALLOW_REGISTRATION", "True")  # 是否允许注册, True为允许，False为不允许
-ALLOW_REGISTRATION = True if ALLOW_REGISTRATION.lower() == "true" else False
+# 是否允许自助注册（1/true/yes/on 开启）
+ALLOW_REGISTRATION = env_bool("ALLOW_REGISTRATION", True)
 
 # ========== 安全与运维 ==========
 # 是否启用 Django 密码强度校验（生产环境建议开启）
@@ -99,7 +99,6 @@ MYSQL_USER, MYSQL_PASSWORD, MYSQL_PORT = DB_USER, DB_PASSWORD, DB_PORT
 # ==========数据库配置 结束=====================
 
 LANGUAGE_CODE = os.environ.get("LANGUAGE_CODE", "zh-hans")
-# #LANGUAGE_CODE = os.environ.get("LANGUAGE_CODE", 'en')
 
 # Application definition
 
@@ -299,8 +298,6 @@ AUTH_PASSWORD_VALIDATORS = [
 
 # Internationalization
 # https://docs.djangoproject.com/en/3.1/topics/i18n/
-
-# LANGUAGE_CODE = 'zh-hans'
 
 TIME_ZONE = "Asia/Shanghai"
 

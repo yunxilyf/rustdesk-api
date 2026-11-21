@@ -6,18 +6,34 @@
 
 <p align="center">
   <img src="https://img.shields.io/badge/Version-1.0.0-blueviolet.svg" />
-  <img src="https://img.shields.io/badge/Python-3.12-blue.svg" />
+  <img src="https://img.shields.io/badge/Python-3.12%2B-blue.svg" />
   <img src="https://img.shields.io/badge/Django-6.1-0C4B33.svg" />
   <img src="https://img.shields.io/badge/RustDesk-1.5.x-0A5BE0.svg" />
   <img src="https://img.shields.io/badge/License-MIT-green.svg" />
 </p>
 
-一个用 Python / Django 实现的 RustDesk API 服务端，对齐 RustDesk 1.5.x 客户端的 37 个 API 契约，
+一个用 Python / Django 实现的 RustDesk API 服务端，对齐 RustDesk 1.5.x 客户端的 37 个「方法 + 路径」契约（35 条路径），
 并提供一套基于腾讯 TDesign（Vue 3 + Vite）的管理控制台，支持多用户数据隔离。
 
 - 客户端侧：登录、地址簿（新旧两代协议）、设备列表、心跳与系统信息、连接/文件审计、设备部署。
 - 管理侧：设备与归属、地址簿与标签、设备分组、用户与注册开关、连接/文件日志。
-- 部署侧：SQLite 开箱即用，可切 PostgreSQL / MySQL；Docker 镜像与生产部署文档齐备。
+- 部署侧：SQLite 开箱即用，可切 PostgreSQL / MySQL 8.4；Docker 镜像与生产部署文档齐备。
+
+## 架构
+
+```mermaid
+flowchart LR
+  C[RustDesk 客户端] -->|/api/* Bearer Token| D[Django 6.1]
+  B[浏览器 /console/] -->|/api/console/* Session + CSRF| D
+  D --> DB[(SQLite / PostgreSQL / MySQL 8.4)]
+  D --> S[static/console 构建产物]
+  D --> R[records / logs]
+```
+
+- 同一个 Django 应用同时提供两套接口：`/api/*` 给 RustDesk 客户端，`/api/console/*` 给控制台，二者共用模型与权限。
+- 控制台是 hash 路由 SPA，构建产物提交在 `static/console/`，不需要单独的前端服务器。
+- 多用户隔离：管理员看全量；普通用户看到自己名下设备、个人地址簿和 `rule > 0` 的共享地址簿。
+- 可选 nginx 终止 TLS 并反代到 `21114`；客户端与控制台同域，无需额外跨域配置。
 
 ## 截图
 
@@ -44,7 +60,7 @@
 ## 快速开始（本地）
 
 ```bash
-# 1. 安装依赖（Python 3.12）
+# 1. 安装依赖（Python 3.12+）
 pip install -r requirements.txt
 
 # 2. 初始化数据库

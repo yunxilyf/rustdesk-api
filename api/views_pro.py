@@ -5,7 +5,7 @@
 - /api/ab/personal、/api/ab/settings、/api/ab/shared/profiles
 - /api/ab/peers、/api/ab/tags/<guid>、/api/ab/peer|tag/*
 - /api/users、/api/peers、/api/device-group/accessible
-- /api/switch-grant、/api/record、/api/devices/cli
+- /api/switch-grant、/api/record、/api/devices/cli、/api/devices/deploy
 - /api/audit/conn/active
 """
 

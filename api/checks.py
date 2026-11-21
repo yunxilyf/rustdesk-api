@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 """生产部署安全自检（Django checks）。
 
-运行 `python manage.py check` 会看到 W 级警告；`python manage.py check --deploy`
-会把它们当作部署问题提示。不影响开发环境（DEBUG=True 时不提示）。
+仅在 `python manage.py check --deploy` 时执行：普通 `check` 不提示，
+开发环境（DEBUG=True）也不会被这些警告打扰。
 """
 
 from django.conf import settings

@@ -6,20 +6,20 @@
 
 <p align="center">
   <img src="https://img.shields.io/badge/Version-1.0.0-blueviolet.svg" />
-  <img src="https://img.shields.io/badge/Python-3.12-blue.svg" />
+  <img src="https://img.shields.io/badge/Python-3.12%2B-blue.svg" />
   <img src="https://img.shields.io/badge/Django-6.1-0C4B33.svg" />
   <img src="https://img.shields.io/badge/RustDesk-1.5.x-0A5BE0.svg" />
   <img src="https://img.shields.io/badge/License-MIT-green.svg" />
 </p>
 
-A Django implementation of the RustDesk API server, aligned with the 37 API endpoints used by
+A Django implementation of the RustDesk API server, aligned with the 37 client method/path contracts (35 paths) used by
 RustDesk 1.5.x clients, plus a multi-tenant admin console built with Tencent TDesign (Vue 3 + Vite).
 
 - **Client API**: login, address books (legacy + multi-address-book), device lists, heartbeat/sysinfo,
   connection/file audit, switch grants, device deployment.
 - **Admin console**: devices and ownership, address books and colored tags, device groups, users and a
   registration switch, connection/file logs, per-user data isolation.
-- **Deployment**: SQLite out of the box, optional PostgreSQL / MySQL, Docker image and production guide.
+- **Deployment**: SQLite out of the box, optional PostgreSQL / MySQL 8.4, Docker image and production guide.
 
 ## Quick start
 
