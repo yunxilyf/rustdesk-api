@@ -77,74 +77,78 @@
         <code>{{ oidc.redirect_uri || CALLBACK_PLACEHOLDER }}</code>
       </div>
 
-      <div
-        v-for="(p, idx) in oidc.providers"
-        :key="idx"
-        style="border: 1px solid var(--app-border); border-radius: 8px; padding: 12px 12px 0; margin-bottom: 12px"
-      >
-        <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px">
-          <strong>{{ p.name || p.op || '未命名登录方式' }}</strong>
-          <div style="display: flex; align-items: center">
-            <t-switch v-model="p.enabled" size="small" />
-            <span class="muted" style="margin: 0 12px 0 6px">启用</span>
-            <t-button variant="text" theme="danger" size="small" @click="removeProvider(idx)">删除</t-button>
-          </div>
-        </div>
-        <t-form label-width="110px">
-          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0 16px">
-            <t-form-item label="类型">
-              <t-select v-model="p.type" :options="OAUTH_TYPES" style="width: 100%" @change="() => syncOpFromType(p)" />
-            </t-form-item>
-            <t-form-item label="标识 op">
-              <t-input
-                v-model="p.op"
-                :maxlength="32"
-                :disabled="p.saved"
-                :placeholder="p.saved ? '保存后不可修改' : '跟随类型自动填充'"
-                @change="() => (p.op_fixed = !!p.op)"
-              />
-              <div v-if="p.saved" class="muted" style="font-size: 12px">标识参与账号绑定，保存后不可修改</div>
-            </t-form-item>
-            <t-form-item label="按钮名称">
-              <t-input v-model="p.name" :maxlength="64" placeholder="留空则用标识" />
-            </t-form-item>
-            <t-form-item label="排序">
-              <t-input-number v-model="p.sort" theme="normal" style="width: 100%" />
-            </t-form-item>
-          </div>
-          <t-form-item v-if="p.type !== 'github'" label="Issuer">
-            <t-input v-model="p.issuer" placeholder="https://id.example.com/realms/main（Google 可留空）" />
-          </t-form-item>
-          <t-form-item label="Client ID">
-            <t-input v-model="p.client_id" placeholder="rustdesk-api" />
-          </t-form-item>
-          <t-form-item label="Client Secret">
-            <t-input
-              v-model="p.client_secret"
-              type="password"
-              :placeholder="p.has_secret && !p.clear_secret ? '已保存，留空则不修改' : '填写客户端密钥'"
-            />
-          </t-form-item>
-          <t-form-item label="Scopes">
-            <t-input v-model="p.scopes" placeholder="留空使用默认值" />
-          </t-form-item>
-          <t-form-item label=" ">
-            <t-checkbox v-model="p.auto_register">允许自动创建账号</t-checkbox>
-            <t-checkbox v-model="p.pkce_enable" style="margin-left: 16px">启用 PKCE</t-checkbox>
-            <t-button
-              v-if="p.has_secret && !p.clear_secret"
-              variant="text"
-              theme="danger"
-              style="margin-left: 8px"
-              @click="markClearSecret(p)"
-            >
-              清除密钥
-            </t-button>
-            <span v-if="p.clear_secret" class="muted" style="margin-left: 8px">保存后清除已存密钥</span>
-            <t-button v-if="p.clear_secret" variant="text" size="small" @click="undoClearSecret(p)">撤销</t-button>
-          </t-form-item>
-        </t-form>
-      </div>
+      <t-collapse v-model="expandedProviders" style="margin-bottom: 12px">
+        <t-collapse-panel v-for="(p, idx) in oidc.providers" :key="idx" :value="idx">
+          <template #header>
+            <div style="display: flex; align-items: center; justify-content: space-between; width: 100%">
+              <span>
+                <strong>{{ p.name || p.type || p.op || '未命名登录方式' }}</strong>
+                <t-tag v-if="p.name && p.type" size="small" variant="light" style="margin-left: 8px">{{ p.type }}</t-tag>
+                <t-tag v-if="p.saved" size="small" theme="success" variant="light" style="margin-left: 6px">已保存</t-tag>
+              </span>
+              <span style="display: flex; align-items: center" @click.stop>
+                <t-switch v-model="p.enabled" size="small" />
+                <span class="muted" style="margin: 0 12px 0 6px">启用</span>
+                <t-button variant="text" theme="danger" size="small" @click.stop="removeProvider(idx)">删除</t-button>
+              </span>
+            </div>
+          </template>
+          <t-form label-width="110px">
+                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0 16px">
+                      <t-form-item label="类型">
+                        <t-select v-model="p.type" :options="OAUTH_TYPES" style="width: 100%" @change="() => syncOpFromType(p)" />
+                      </t-form-item>
+                      <t-form-item label="标识 op">
+                        <t-input
+                          v-model="p.op"
+                          :maxlength="32"
+                          :disabled="p.saved"
+                          :placeholder="p.saved ? '保存后不可修改' : '跟随类型自动填充'"
+                          @change="() => (p.op_fixed = !!p.op)"
+                        />
+                        <div v-if="p.saved" class="muted" style="font-size: 12px">标识参与账号绑定，保存后不可修改</div>
+                      </t-form-item>
+                      <t-form-item label="按钮名称">
+                        <t-input v-model="p.name" :maxlength="64" placeholder="留空则用标识" />
+                      </t-form-item>
+                      <t-form-item label="排序">
+                        <t-input-number v-model="p.sort" theme="normal" style="width: 100%" />
+                      </t-form-item>
+                    </div>
+                    <t-form-item v-if="p.type !== 'github'" label="Issuer">
+                      <t-input v-model="p.issuer" placeholder="https://id.example.com/realms/main（Google 可留空）" />
+                    </t-form-item>
+                    <t-form-item label="Client ID">
+                      <t-input v-model="p.client_id" placeholder="rustdesk-api" />
+                    </t-form-item>
+                    <t-form-item label="Client Secret">
+                      <t-input
+                        v-model="p.client_secret"
+                        type="password"
+                        :placeholder="p.has_secret && !p.clear_secret ? '已保存，留空则不修改' : '填写客户端密钥'"
+                      />
+                    </t-form-item>
+                    <t-form-item label="Scopes">
+                      <t-input v-model="p.scopes" placeholder="留空使用默认值" />
+                    </t-form-item>
+                    <t-form-item label=" ">
+                      <t-checkbox v-model="p.auto_register">允许自动创建账号</t-checkbox>
+                      <t-checkbox v-model="p.pkce_enable" style="margin-left: 16px">启用 PKCE</t-checkbox>
+                      <t-button
+                        v-if="p.has_secret && !p.clear_secret"
+                        variant="text"
+                        theme="danger"
+                        style="margin-left: 8px"
+                        @click="markClearSecret(p)"
+                      >
+                        清除密钥
+                      </t-button>
+                      <span v-if="p.clear_secret" class="muted" style="margin-left: 8px">保存后清除已存密钥</span>
+                      <t-button v-if="p.clear_secret" variant="text" size="small" @click="undoClearSecret(p)">撤销</t-button>
+                    </t-form-item>
+                  </t-form>
+        </t-collapse-panel>
+      </t-collapse>
 
       <div v-if="oidcLoading" class="muted" style="margin-bottom: 12px">正在加载登录方式…</div>
       <div v-else-if="!oidc.providers.length" class="muted" style="margin-bottom: 12px">
@@ -197,6 +201,7 @@ const settings = reactive({ allow_registration: true })
 const savingSetting = ref(false)
 const savingOidc = ref(false)
 const oidc = reactive({ enabled: false, redirect_uri: '', providers: [] })
+const expandedProviders = ref([])
 const oidcLoaded = ref(false)
 const oidcLoading = ref(false)
 const OAUTH_TYPES = [
@@ -307,6 +312,7 @@ function addProvider() {
   const provider = newProvider(oidc.providers.length)
   provider.op = uniqueOp(provider, provider.type)
   oidc.providers.push(provider)
+  expandedProviders.value = [...expandedProviders.value, oidc.providers.length - 1]
 }
 
 function removeProvider(index) {
@@ -320,7 +326,10 @@ function removeProvider(index) {
     header: '删除登录方式',
     body: `删除「${provider.name || provider.op}」后，已绑定的用户将无法再用它登录，确定继续？`,
     theme: 'warning',
-    onConfirm: () => oidc.providers.splice(index, 1),
+    onConfirm: () => {
+      oidc.providers.splice(index, 1)
+      expandedProviders.value = []
+    },
   })
 }
 

@@ -1,0 +1,142 @@
+# 容器内置 nginx：对客户端仍然只暴露 21114 一个端口。
+# 占位符由 entrypoint.sh 校验并渲染：
+#   __APP_PORT__ / __API_PORT__ / __WEBROOT__ / __HBBS_WS__ / __HBBR_WS__
+#   __XFF_VALUE__（BEHIND_PROXY=1 时 $proxy_add_x_forwarded_for，否则 $remote_addr）
+#   __PROTO_DEFAULT__（BEHIND_PROXY=1 时 $http_x_forwarded_proto，否则 $scheme）
+map $http_x_forwarded_proto $rd_forwarded_proto {
+    default __PROTO_DEFAULT__;
+    ""      $scheme;
+}
+map $http_host $rd_host {
+    ""      $host;
+    default $http_host;
+}
+server {
+    listen __APP_PORT__;
+    server_name _;
+    server_tokens off;
+    absolute_redirect off;
+    access_log /dev/stdout;
+    error_log /dev/stderr warn;
+    client_max_body_size 16m;
+
+    # 内部鉴权子请求：校验控制台 Django Session（/web/ 与 /ws/* 共用）
+    location = /_web_auth {
+        internal;
+        proxy_pass http://127.0.0.1:__API_PORT__/api/webclient/auth;
+        proxy_pass_request_body off;
+        proxy_set_header Content-Length "";
+        proxy_set_header Host $rd_host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For __XFF_VALUE__;
+        proxy_set_header X-Forwarded-Proto $rd_forwarded_proto;
+        proxy_set_header X-Forwarded-Host $rd_host;
+        proxy_set_header Cookie $http_cookie;
+    }
+
+    # 客户端 API、控制台、兼容登录入口全部转给本机 gunicorn
+    location /api/ {
+        proxy_pass http://127.0.0.1:__API_PORT__;
+        proxy_set_header Host $rd_host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For __XFF_VALUE__;
+        proxy_set_header X-Forwarded-Proto $rd_forwarded_proto;
+        proxy_set_header X-Forwarded-Host $rd_host;
+    }
+
+    location /console/ {
+        proxy_pass http://127.0.0.1:__API_PORT__;
+        proxy_set_header Host $rd_host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For __XFF_VALUE__;
+        proxy_set_header X-Forwarded-Proto $rd_forwarded_proto;
+        proxy_set_header X-Forwarded-Host $rd_host;
+    }
+
+    location = /web-login {
+        proxy_pass http://127.0.0.1:__API_PORT__;
+        proxy_set_header Host $rd_host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For __XFF_VALUE__;
+        proxy_set_header X-Forwarded-Proto $rd_forwarded_proto;
+        proxy_set_header X-Forwarded-Host $rd_host;
+    }
+
+    location /admin/ {
+        proxy_pass http://127.0.0.1:__API_PORT__;
+        proxy_set_header Host $rd_host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For __XFF_VALUE__;
+        proxy_set_header X-Forwarded-Proto $rd_forwarded_proto;
+        proxy_set_header X-Forwarded-Host $rd_host;
+    }
+
+    location /static/ {
+        alias /app/static/;
+        access_log off;
+        add_header X-Content-Type-Options "nosniff" always;
+        add_header Referrer-Policy "same-origin" always;
+        add_header X-Frame-Options "DENY" always;
+    }
+
+    # 动态配置必须优先于 /web/ 静态文件；后端校验控制台 Session 并签发共享令牌
+    location = /web/rd-config.js {
+        proxy_pass http://127.0.0.1:__API_PORT__/api/webclient/config.js;
+        proxy_set_header Host $rd_host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For __XFF_VALUE__;
+        proxy_set_header X-Forwarded-Proto $rd_forwarded_proto;
+        proxy_set_header X-Forwarded-Host $rd_host;
+    }
+
+    location = /web {
+        return 302 /web/;
+    }
+
+    # 网页远控静态站点：逐请求校验真实控制台 Session，注销/禁用账号立即失效
+    location /web/ {
+        auth_request /_web_auth;
+        error_page 401 = @web_login_redirect;
+        root __WEBROOT__;
+        try_files $uri $uri/ /web/index.html =404;
+        add_header Cache-Control "no-store" always;
+        add_header X-Content-Type-Options "nosniff" always;
+        add_header Referrer-Policy "same-origin" always;
+        add_header X-Frame-Options "SAMEORIGIN" always;
+    }
+
+    location @web_login_redirect {
+        return 302 /console/?next=/web/;
+    }
+
+    # hbbs / hbbr 的 WebSocket 入口（同样要求已登录控制台会话，防止匿名蹭中继）
+    location /ws/id {
+        auth_request /_web_auth;
+        proxy_pass http://__HBBS_WS__;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host $rd_host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For __XFF_VALUE__;
+        proxy_set_header X-Forwarded-Proto $rd_forwarded_proto;
+        proxy_read_timeout 3600s;
+    }
+
+    location /ws/relay {
+        auth_request /_web_auth;
+        proxy_pass http://__HBBR_WS__;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host $rd_host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For __XFF_VALUE__;
+        proxy_set_header X-Forwarded-Proto $rd_forwarded_proto;
+        proxy_read_timeout 3600s;
+    }
+
+    location = / {
+        return 302 /console/;
+    }
+}

@@ -13,6 +13,10 @@
           <template #icon><t-icon :name="item.icon" /></template>
           {{ item.title }}
         </t-menu-item>
+        <t-menu-item value="/web/">
+          <template #icon><t-icon name="internet" /></template>
+          网页远控
+        </t-menu-item>
       </t-menu>
       <div class="aside-version muted">v{{ appVersion }}</div>
     </t-aside>
@@ -41,11 +45,14 @@
 </template>
 
 <script setup>
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { api } from '../api'
 import { clearUser, store } from '../store'
 import logo from '../assets/logo-128.png'
+
+const AUTH_CHANNEL_NAME = 'rustdesk-auth'
+const AUTH_LOGOUT_STORAGE_KEY = 'rd:auth_logout'
 
 const route = useRoute()
 const router = useRouter()
@@ -68,8 +75,33 @@ watch(
 )
 
 const appVersion = ref('')
+let authChannel = null
+
+function handleRemoteLogout() {
+  clearUser()
+  if (route.name !== 'login') {
+    router.replace({ name: 'login' })
+  }
+}
+
+function onStorageSync(ev) {
+  if (ev.key === AUTH_LOGOUT_STORAGE_KEY && ev.newValue) {
+    handleRemoteLogout()
+  }
+}
 
 onMounted(async () => {
+  window.addEventListener('storage', onStorageSync)
+  if (typeof window.BroadcastChannel === 'function') {
+    try {
+      authChannel = new window.BroadcastChannel(AUTH_CHANNEL_NAME)
+      authChannel.onmessage = (ev) => {
+        if (ev?.data?.type === 'logout') handleRemoteLogout()
+      }
+    } catch (e) {
+      authChannel = null
+    }
+  }
   try {
     const data = await api.getVersion()
     appVersion.value = String(data.version || '').replace(/^v/, '')
@@ -78,10 +110,60 @@ onMounted(async () => {
   }
 })
 
+onBeforeUnmount(() => {
+  window.removeEventListener('storage', onStorageSync)
+  if (authChannel) {
+    try {
+      authChannel.close()
+    } catch (e) {
+      /* ignore */
+    }
+    authChannel = null
+  }
+})
+
 const currentTitle = computed(() => route.meta?.title || '')
 const displayName = computed(() => user.value?.display_name || user.value?.name || user.value?.username || '未登录')
 
+function clearWebClientSession() {
+  try {
+    const raw = window.localStorage.getItem('rd:local')
+    if (!raw) return
+    const data = JSON.parse(raw)
+    if (!data || typeof data !== 'object') return
+    delete data.access_token
+    delete data.user_info
+    delete data.verifier
+    window.localStorage.setItem('rd:local', JSON.stringify(data))
+  } catch (e) {
+    /* 忽略 localStorage 不可用或格式异常 */
+  }
+}
+
+function broadcastAuthLogout() {
+  const ts = Date.now()
+  try {
+    window.localStorage.setItem(AUTH_LOGOUT_STORAGE_KEY, String(ts))
+  } catch (e) {
+    /* ignore */
+  }
+  if (typeof window.BroadcastChannel === 'function') {
+    try {
+      const ch = new window.BroadcastChannel(AUTH_CHANNEL_NAME)
+      ch.postMessage({ type: 'logout', ts })
+      ch.close()
+    } catch (e) {
+      /* ignore */
+    }
+  }
+}
+
 function onMenuChange(value) {
+  if (value === '/web/') {
+    window.open('/web/', '_blank', 'noopener')
+    active.value = route.path
+    return
+  }
   if (value !== route.path) router.push(value)
 }
 
@@ -99,6 +181,8 @@ async function onUserAction({ value }) {
     } catch (e) {
       /* ignore */
     }
+    clearWebClientSession()
+    broadcastAuthLogout()
     clearUser()
     router.replace({ name: 'login' })
   }

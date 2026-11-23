@@ -1,7 +1,7 @@
 from django.urls import re_path as url
 from django.views.decorators.csrf import csrf_exempt
 
-from api import console_api, views, views_pro
+from api import console_api, views, views_pro, webclient
 
 
 def client(view):
@@ -16,6 +16,8 @@ def client(view):
 urlpatterns = [
     # ================= 新版客户端 API（精确匹配，必须放在前缀路由之前） =================
     url(r"^health/?$", client(views_pro.health)),
+    url(r"^webclient/auth/?$", client(webclient.webclient_auth)),
+    url(r"^webclient/config\.js$", client(views_pro.webclient_config)),
     url(r"^login-options/?$", client(views_pro.login_options)),
     url(r"^oidc/auth-query/?$", client(views_pro.oidc_auth_query)),
     url(r"^oidc/console/auth/?$", client(views_pro.console_oauth_start)),
@@ -41,6 +43,7 @@ urlpatterns = [
     url(r"^ab/get/?$", client(views.ab_get)),
     url(r"^ab/?$", client(views.ab)),
     url(r"^users/?$", client(views_pro.users)),
+    url(r"^peers/online/?$", client(views_pro.peers_online)),
     url(r"^peers/?$", client(views_pro.peers)),
     url(r"^device-group/accessible/?$", client(views_pro.device_groups)),
     url(r"^sysinfo_ver/?$", client(views.sysinfo_ver)),

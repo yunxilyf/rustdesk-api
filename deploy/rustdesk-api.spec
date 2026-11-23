@@ -55,6 +55,7 @@ datas = [
     (str(ROOT / "static"), "static"),
     (str(ROOT / "api" / "templates"), "api/templates"),
     (str(ROOT / ".env.example"), "."),
+    (str(ROOT / "deploy" / "web"), "deploy/web"),
 ]
 
 a = Analysis(  # noqa: F821

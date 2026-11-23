@@ -37,10 +37,29 @@ const router = createRouter({
 })
 
 router.beforeEach(async (to) => {
-  document.title = to.meta.title ? `${to.meta.title} · RustDesk 控制台` : 'RustDesk 控制台'
-  if (to.meta.public) return true
+  const nextIsWeb = new URLSearchParams(window.location.search).get('next') === '/web/'
+  document.title =
+    to.name === 'login' && nextIsWeb
+      ? '登录 · RustDesk 网页远控'
+      : to.meta.title
+        ? `${to.meta.title} · RustDesk 控制台`
+        : 'RustDesk 控制台'
+  if (to.meta.public) {
+    if (to.name === 'login' && nextIsWeb) {
+      const user = await loadUser()
+      if (user) {
+        window.location.replace('/web/')
+        return false
+      }
+    }
+    return true
+  }
   const user = await loadUser()
   if (!user) return { name: 'login', query: { redirect: to.fullPath } }
+  if (nextIsWeb) {
+    window.location.replace('/web/')
+    return false
+  }
   if (to.meta.admin && !store.user?.is_admin) return { name: 'dashboard' }
   return true
 })

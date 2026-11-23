@@ -4,6 +4,12 @@
       <img class="login-logo" :src="logo" alt="RustDesk" />
       <h1 class="login-title">{{ title }}</h1>
       <p class="login-sub">{{ subtitle }}</p>
+      <t-alert
+        v-if="fromWebClient && !setupMode && !setupPending"
+        theme="info"
+        class="login-web-tip"
+        message="访问网页远控需要先登录，登录成功后将自动进入网页远控。"
+      />
       <t-form v-if="!setupPending" :data="form" label-width="0" :show-error-message="false" @submit="submit">
         <t-form-item name="username">
           <t-input v-model="form.username" size="large" placeholder="用户名" clearable autofocus />
@@ -37,6 +43,8 @@
       <div v-if="!setupMode" class="login-switch">
         <a v-if="!registerMode && allowRegistration" class="login-link" @click="switchMode(true)">没有账号？注册</a>
         <a v-else-if="registerMode" class="login-link" @click="switchMode(false)">已有账号？返回登录</a>
+        <span v-if="fromWebClient && !registerMode && allowRegistration" class="login-switch-sep">·</span>
+        <a v-if="fromWebClient && !registerMode" class="login-link" @click="goConsoleLogin">仅进入控制台</a>
       </div>
     </div>
   </div>
@@ -59,6 +67,7 @@ const setupPending = ref(false)
 const registerMode = ref(false)
 const allowRegistration = ref(false)
 const providers = ref([])
+const fromWebClient = ref(new URLSearchParams(window.location.search).get('next') === '/web/')
 
 const PROVIDER_ICONS = {
   // 官方品牌图标：GitHub 用单色 octocat，Google 用四色 G。
@@ -84,17 +93,29 @@ function oauthName(provider) {
 }
 
 function oauthHref(provider) {
-  return `/api/oidc/console/auth?op=${encodeURIComponent(provider.op)}`
+  const next = fromWebClient.value ? '&next=%2Fweb%2F' : ''
+  return `/api/oidc/console/auth?op=${encodeURIComponent(provider.op)}${next}`
 }
 
-const title = computed(() => (setupMode.value ? '初始化控制台' : registerMode.value ? '注册账号' : 'RustDesk 控制台'))
+const title = computed(() => {
+  if (setupMode.value) return '初始化控制台'
+  if (registerMode.value) return '注册账号'
+  if (fromWebClient.value) return 'RustDesk 网页远控'
+  return 'RustDesk 控制台'
+})
 const subtitle = computed(() => {
   if (setupMode.value) return '首次使用，请创建第一个管理员账号'
   if (setupPending.value) return '请在服务端运行 python manage.py ensure_admin，然后刷新此页'
   if (registerMode.value) return '注册后即可登录控制台（权限由管理员分配）'
+  if (fromWebClient.value) return '与控制台共用账号，登录后无需在网页端重复登录'
   return '使用管理员或普通用户账号登录'
 })
-const submitText = computed(() => (setupMode.value ? '创建管理员' : registerMode.value ? '注 册' : '登 录'))
+const submitText = computed(() => {
+  if (setupMode.value) return '创建管理员'
+  if (registerMode.value) return '注 册'
+  if (fromWebClient.value) return '登录并进入网页远控'
+  return '登 录'
+})
 
 function switchMode(toRegister) {
   registerMode.value = toRegister
@@ -102,9 +123,23 @@ function switchMode(toRegister) {
   form.confirm = ''
 }
 
+function goConsoleLogin() {
+  fromWebClient.value = false
+  window.history.replaceState(null, '', '/console/#/login')
+  document.title = '登录 · RustDesk 控制台'
+}
+
 function goNext() {
+  if (fromWebClient.value) {
+    window.location.replace('/web/')
+    return
+  }
   const redirect = route.query.redirect
-  router.replace(typeof redirect === 'string' && redirect.startsWith('/') ? redirect : '/dashboard')
+  router.replace(
+    typeof redirect === 'string' && redirect.startsWith('/') && !redirect.startsWith('//')
+      ? redirect
+      : '/dashboard',
+  )
 }
 
 async function submit() {

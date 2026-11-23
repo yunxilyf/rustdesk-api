@@ -9,16 +9,23 @@
 from django.conf import settings
 from django.contrib import admin
 from django.urls import include, path, re_path
+from django.views.generic import RedirectView
 from django.views.static import serve
 
 from api.console_api import console_index
 from api.views import index
+from api.views_pro import webclient_config
+from api.webclient import webclient_file, webclient_login
 
 urlpatterns = [
     path("i18n/", include("django.conf.urls.i18n")),
     path("admin/", admin.site.urls),
     path("", index),
     path("console/", console_index),
+    path("web-login", webclient_login),
+    path("web", RedirectView.as_view(url="/web/", permanent=False)),
+    path("web/rd-config.js", webclient_config),
+    re_path(r"^web/(?P<path>.*)$", webclient_file),
     path("api/", include("api.urls")),
     re_path(r"^static/(?P<path>.*)$", serve, {"document_root": settings.STATIC_ROOT}),
 ]

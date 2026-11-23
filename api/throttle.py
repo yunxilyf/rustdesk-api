@@ -19,13 +19,37 @@ KEY = "login:fail:%s"
 RATE_KEY = "rate:%s"
 
 
+def _trusted_proxy_count():
+    explicit = getattr(settings, "TRUSTED_PROXY_COUNT", None)
+    if explicit is not None:
+        return max(0, int(explicit))
+    return (1 if getattr(settings, "BEHIND_PROXY", False) else 0) + (
+        1 if getattr(settings, "INTERNAL_PROXY", False) else 0
+    )
+
+
 def _client_ip(request):
-    """取客户端 IP；仅在明确处于反向代理后时信任 X-Forwarded-For 的第一段。"""
-    if getattr(settings, "BEHIND_PROXY", False):
-        forwarded = request.META.get("HTTP_X_FORWARDED_FOR", "")
-        if forwarded:
-            return forwarded.split(",")[0].strip()
-    return request.META.get("REMOTE_ADDR", "") or ""
+    """取客户端真实 IP；按可信代理层数从 X-Forwarded-For 右侧剥离。
+
+    从右侧按可信代理跳数取值，避免客户端伪造左侧 X-Forwarded-For 绕过限流或冒充内网 IP：
+    - hops=0（直连）：忽略 X-Forwarded-For，直接取 REMOTE_ADDR；
+    - 仅容器内置 nginx（INTERNAL_PROXY=1, BEHIND_PROXY=0, hops=1）：仅在 REMOTE_ADDR 为本机回环时
+      信任内置 nginx 以 $remote_addr 覆盖后的 X-Forwarded-For；
+    - 外层代理（BEHIND_PROXY=1）：从右数第 hops 项即外层可信代理看到的客户端 IP。
+    """
+    remote = request.META.get("REMOTE_ADDR", "") or ""
+    explicit = getattr(settings, "TRUSTED_PROXY_COUNT", None)
+    hops = _trusted_proxy_count()
+    if hops > 0:
+        trust_xff = (
+            explicit is not None or getattr(settings, "BEHIND_PROXY", False) or remote in ("127.0.0.1", "::1", "")
+        )
+        if trust_xff:
+            forwarded = request.META.get("HTTP_X_FORWARDED_FOR", "")
+            parts = [p.strip() for p in forwarded.split(",") if p.strip()]
+            if parts:
+                return parts[-hops] if len(parts) >= hops else parts[0]
+    return remote
 
 
 def _key(scope, request, username):

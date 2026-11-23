@@ -8,6 +8,7 @@ from django.utils.translation import gettext as _
 
 from api import throttle
 from api.models import UserProfile
+from api.webclient import clear_webclient_cookie, revoke_web_token
 
 
 def index(request):
@@ -85,5 +86,6 @@ def user_register(request):
 
 
 def user_logout(request):
+    revoke_web_token(request)
     auth.logout(request)
-    return JsonResponse({"code": 1, "msg": "ok"})
+    return clear_webclient_cookie(JsonResponse({"code": 1, "msg": "ok"}))

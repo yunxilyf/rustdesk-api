@@ -3,7 +3,7 @@
 #   1. 新建目录并进入：mkdir rustdesk-api && cd rustdesk-api
 #   2. 保存本文件为 docker-compose.yml
 #   3. 创建 .env（见 README「Docker 部署」）
-#   4. 创建数据目录：mkdir -p data/db data/records data/logs
+#   4. 创建数据目录：mkdir -p data/db data/records data/logs webroot
 #   5. docker compose up -d
 services:
   rustdesk-api:
@@ -19,10 +19,17 @@ services:
       - PORT=21114
       - WEB_CONCURRENCY=2
       - WEB_THREADS=4
+      - WEBCLIENT_AUTO_INSTALL=1
+      # 网页远控 WebSocket 指向宿主机上的 hbbs/hbbr（Docker 网桥内用 host-gateway 解析）
+      - HBBS_WS=${HBBS_WS:-host.docker.internal:21118}
+      - HBBR_WS=${HBBR_WS:-host.docker.internal:21119}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
       - ./data/db:/app/db
       - ./data/records:/app/records
       - ./data/logs:/app/logs
+      - ./webroot:/app/webroot
     healthcheck:
       test:
         - CMD

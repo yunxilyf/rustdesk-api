@@ -15,7 +15,15 @@ services:
       - PORT=21114
       - WEB_CONCURRENCY=2
       - WEB_THREADS=4
+      - WEBCLIENT_AUTO_INSTALL=1
+      # 网页远控的 WebSocket 指向宿主机上的 hbbs/hbbr；容器内已带 nginx
+      - HBBS_WS=${HBBS_WS:-host.docker.internal:21118}
+      - HBBR_WS=${HBBR_WS:-host.docker.internal:21119}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
       - ../data/db:/app/db
       - ../data/records:/app/records
       - ../data/logs:/app/logs
+      # 网页远控静态站点；首次启动由 entrypoint 从镜像内 deploy/web 解压
+      - ../webroot:/app/webroot

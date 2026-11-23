@@ -84,13 +84,26 @@ SETUP_MAX_PER_HOUR = env_int("SETUP_MAX_PER_HOUR", 10)
 # 「设备在线」判定窗口：必须大于 HEARTBEAT_DEVICE_TOUCH_SECONDS，
 # 否则两次写库之间设备会被误判成离线（客户端心跳 15 秒一次，但时间戳不是每次都写）。
 DEVICE_ONLINE_SECONDS = env_int("DEVICE_ONLINE_SECONDS", 300)
+
+# 网页远控（/web/）的客户端配置：由 /api/webclient/config.js 动态下发（需已登录控制台会话），
+# 与 API 服务共用同一份部署配置，并自动共享控制台登录态，无需在网页端二次登录。
+ID_SERVER = env_str("ID_SERVER", "")
+API_SERVER = env_str("API_SERVER", "")
+RELAY_SERVER = env_str("RELAY_SERVER", "")
+RUSTDESK_KEY = env_str("RUSTDESK_KEY", "")
+# 免安装包/裸机运行时由 Django 直接提供网页远控静态文件；Docker 由内置 nginx + auth_request 接管。
+WEBCLIENT_ROOT = env_str("WEBCLIENT_ROOT", str(BASE_DIR / "webroot" / "web"))
 # 会话录像存放目录
 RECORD_ROOT = env_str("RECORD_ROOT", os.path.join(str(DATA_DIR), "records"))
 
 # 部署在 HTTPS/反向代理后：HTTPS=1 开启安全 Cookie、HSTS 与 SSL 跳转；
-# BEHIND_PROXY=1 时信任 X-Forwarded-Proto（仅供 nginx 等可信代理使用）。
+# BEHIND_PROXY=1 时信任外层代理传入的 X-Forwarded-Proto 与 X-Forwarded-For；
+# INTERNAL_PROXY=1 由 Docker 镜像入口脚本自动设置，表示前方存在容器内置 nginx。
 HTTPS = env_bool("HTTPS", False)
 BEHIND_PROXY = env_bool("BEHIND_PROXY", False)
+INTERNAL_PROXY = env_bool("INTERNAL_PROXY", False)
+_trusted_proxy_raw = os.environ.get("TRUSTED_PROXY_COUNT", "").strip()
+TRUSTED_PROXY_COUNT = max(0, int(_trusted_proxy_raw)) if _trusted_proxy_raw.isdigit() else None
 if BEHIND_PROXY:
     SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
 SECURE_SSL_REDIRECT = env_bool("SECURE_SSL_REDIRECT", HTTPS)

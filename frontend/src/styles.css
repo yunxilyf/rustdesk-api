@@ -143,7 +143,11 @@ a {
 .login-sub {
   color: var(--app-muted);
   font-size: 13px;
-  margin-bottom: 22px;
+  margin-bottom: 18px;
+}
+
+.login-web-tip {
+  margin-bottom: 16px;
 }
 
 .login-switch {
@@ -151,6 +155,11 @@ a {
   text-align: center;
   font-size: 13px;
   line-height: 20px;
+}
+
+.login-switch-sep {
+  margin: 0 8px;
+  color: var(--app-muted);
 }
 
 .login-link {

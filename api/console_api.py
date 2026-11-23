@@ -41,6 +41,7 @@ from api.models_pro import (
 from api.models_user import UserProfile
 from api.models_work import ConnLog, FileLog, RustDesDevice, RustDeskPeer, RustDeskToken
 from api.tag_colors import normalize_color
+from api.webclient import clear_webclient_cookie, revoke_web_token
 from version import APP_VERSION
 
 
@@ -384,8 +385,9 @@ def console_login_options(request):
 def console_logout(request):
     if request.method != "POST":
         return _fail("请求方式错误", 405)
+    revoke_web_token(request)
     auth_logout(request)
-    return _ok()
+    return clear_webclient_cookie(_ok())
 
 
 @login_required_json

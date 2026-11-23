@@ -11,7 +11,9 @@ from __future__ import annotations
 
 import os
 import secrets
+import shutil
 import sys
+import tarfile
 from pathlib import Path
 
 
@@ -39,6 +41,45 @@ def _app_home() -> Path:
     return Path(__file__).resolve().parent.parent
 
 
+def _bundle_root(home: Path) -> Path:
+    """PyInstaller onedir 把 datas 放在 _internal，源码运行时就在仓库目录。"""
+    return Path(getattr(sys, "_MEIPASS", home))
+
+
+def _ensure_webclient(home: Path, data_dir: Path) -> Path:
+    """首次运行时把镜像内置的网页远控包解压到 data/webroot/web。"""
+    web_root = data_dir / "webroot" / "web"
+    if (web_root / "index.html").exists():
+        return web_root
+    packages = sorted((_bundle_root(home) / "deploy" / "web").glob("rustdesk-web-*.tar.gz"))
+    if not packages:
+        return web_root
+    web_root.parent.mkdir(parents=True, exist_ok=True)
+    staging = web_root.parent / ".web.new"
+    shutil.rmtree(staging, ignore_errors=True)
+    staging.mkdir(parents=True)
+    try:
+        with tarfile.open(packages[-1], "r:gz") as archive:
+            try:
+                archive.extractall(staging, filter="data")  # Python 3.12+
+            except TypeError:
+                base = staging.resolve()
+                for member in archive.getmembers():
+                    if member.issym() or member.islnk() or member.isdev():
+                        raise ValueError(f"不安全的归档条目：{member.name}")
+                    target = (base / member.name).resolve()
+                    if base != target and base not in target.parents:
+                        raise ValueError(f"不安全的归档路径：{member.name}")
+                archive.extractall(staging)
+        if web_root.exists():
+            shutil.rmtree(web_root)
+        staging.rename(web_root)
+        print(f"[rustdesk-api] 已安装网页远控到 {web_root}", flush=True)
+    finally:
+        shutil.rmtree(staging, ignore_errors=True)
+    return web_root
+
+
 def _prepare_environment(home: Path) -> Path:
     # 先读可执行文件旁的 .env，允许其中覆盖 DATA_DIR / PORT / ALLOWED_HOSTS。
     try:
@@ -61,6 +102,7 @@ def _prepare_environment(home: Path) -> Path:
 
     # 打包版要让数据库、日志落到可执行文件旁，而不是临时解包目录。
     os.environ["DATA_DIR"] = str(data_dir)
+    os.environ.setdefault("WEBCLIENT_ROOT", str(_ensure_webclient(home, data_dir)))
 
     # 独立运行时默认允许局域网访问；可用 .env 覆盖为具体域名。
     os.environ.setdefault("ALLOWED_HOSTS", "*")
@@ -134,6 +176,7 @@ def main() -> int:
             "=" * 64,
             "  RustDesk API Server 已启动",
             f"  控制台（本机）：  {console_url}",
+            f"  网页远控：        http://127.0.0.1:{port}/web/  （需先登录控制台）",
         ]
         if lan_url:
             lines.append(f"  控制台（局域网）：{lan_url}")

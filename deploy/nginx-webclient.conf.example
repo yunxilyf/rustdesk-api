@@ -1,0 +1,76 @@
+# 网页远控外部 nginx 示例（适用于不使用容器内置 nginx 的裸机部署）。
+# 若使用本仓库 Docker 镜像，容器内置 nginx 已提供 /web/、/web/rd-config.js 与 /ws/*，
+# 宿主机 nginx 只需整站反代到 127.0.0.1:21114（含 WebSocket Upgrade），无需再配本文件。
+# 该片段放在 rustdeskapi 站点的 server { } 内；需要 nginx 具备 http_auth_request_module
+# （若宿主 nginx 缺少 auth_request 模块，直接把 /web/ 整段 proxy_pass 到 Django 127.0.0.1:21114 即可）。
+
+location = /_web_auth {
+    internal;
+    proxy_pass http://127.0.0.1:21114/api/webclient/auth;
+    proxy_pass_request_body off;
+    proxy_set_header Content-Length "";
+    proxy_set_header Host $http_host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_set_header Cookie $http_cookie;
+}
+
+location = /web { return 302 /web/; }
+
+# 网页端配置由 API 服务动态生成（含 ID_SERVER / API_SERVER / RUSTDESK_KEY 及当前控制台会话令牌），
+# 后端校验控制台 Session 后返回，未登录返回 401。
+location = /web/rd-config.js {
+    proxy_pass http://127.0.0.1:21114/api/webclient/config.js;
+    proxy_set_header Host $http_host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    add_header Cache-Control "no-store" always;
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header Cross-Origin-Resource-Policy "same-origin" always;
+}
+
+location /web/ {
+    auth_request /_web_auth;
+    error_page 401 = @web_login_redirect;
+    root /opt/rustdesk-api/webroot;
+    index index.html;
+    try_files $uri $uri/ /web/index.html;
+    add_header Cache-Control "no-store" always;
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header Referrer-Policy "same-origin" always;
+    add_header X-Frame-Options "SAMEORIGIN" always;
+}
+
+location @web_login_redirect {
+    return 302 /console/?next=/web/;
+}
+
+location /ws/id {
+    auth_request /_web_auth;
+    proxy_pass http://127.0.0.1:21118;
+    proxy_http_version 1.1;
+    proxy_set_header Upgrade $http_upgrade;
+    proxy_set_header Connection "Upgrade";
+    proxy_set_header Host $http_host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_read_timeout 3600s;
+    proxy_send_timeout 3600s;
+}
+
+location /ws/relay {
+    auth_request /_web_auth;
+    proxy_pass http://127.0.0.1:21119;
+    proxy_http_version 1.1;
+    proxy_set_header Upgrade $http_upgrade;
+    proxy_set_header Connection "Upgrade";
+    proxy_set_header Host $http_host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_read_timeout 3600s;
+    proxy_send_timeout 3600s;
+}

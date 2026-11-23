@@ -30,7 +30,7 @@ from api.models import (
 )
 from api.tag_colors import normalize_color
 
-from . import client_auth, throttle, views_pro
+from . import client_auth, throttle, views_pro, webclient
 
 
 def login(request):
@@ -91,7 +91,13 @@ def logout(request):
     if token is None:
         return views_pro._unauthorized()
     RustDeskToken.objects.filter(pk=token.pk, access_token=token.access_token).delete()
-    return JsonResponse({"code": 1})
+    resp = JsonResponse({"code": 1})
+    # 若在网页远控内退出的是当前浏览器会话的 Web 令牌，同步退出控制台 Session，
+    # 避免刷新 /web/ 后重新复用控制台会话自动登回。
+    if webclient.is_current_session_web_token(request, token):
+        auth.logout(request)
+        webclient.clear_webclient_cookie(resp)
+    return resp
 
 
 def currentUser(request):

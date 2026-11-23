@@ -9,10 +9,13 @@
 - /api/audit/conn/active
 """
 
+import ipaddress
 import json
 import logging
 import time
 import uuid
+from datetime import timedelta
+from urllib.parse import urlsplit
 
 from django.conf import settings
 from django.contrib.auth import login as auth_login
@@ -667,6 +670,52 @@ def peers(request):
     return JsonResponse({"total": total, "data": data[start : start + page_size]})
 
 
+def peers_online(request):
+    """POST /api/peers/online {"ids": [...]} -> {onlines, offlines}
+
+    网页端的 hbbs WebSocket 桥不处理 OnlineRequest（桌面版走 TCP 21115 的
+    create_online_stream），所以这里用设备心跳时间给出与桌面端一致的在线状态。
+    """
+    token, user = _auth(request)
+    if user is None:
+        return _unauthorized()
+    try:
+        payload = json.loads(request.body or b"{}")
+    except (TypeError, ValueError):
+        payload = {}
+    ids = payload.get("ids") if isinstance(payload, dict) else None
+    if not isinstance(ids, list):
+        ids = []
+    seen = set()
+    clean = []
+    for value in ids:
+        if value is None:
+            continue
+        rid = str(value).strip()
+        if rid and rid not in seen:
+            seen.add(rid)
+            clean.append(rid)
+    ids = clean[:500]
+    if not user.is_admin:
+        # 只允许查询自己能看到的设备，避免拿 9 位 ID 枚举在线状态。
+        visible = set(AddressBookPeer.objects.filter(ab_id__in=_accessible_abs(user)).values_list("rid", flat=True))
+        visible.update(row["rid"] for row in owned_device_ids(user))
+        ids = [rid for rid in ids if rid in visible]
+    if not ids:
+        return JsonResponse({"onlines": [], "offlines": []})
+    window = int(getattr(settings, "DEVICE_ONLINE_SECONDS", 300))
+    cutoff = timezone.now() - timedelta(seconds=window)
+    online = set(
+        RustDesDevice.objects.filter(rid__in=ids, update_time__gte=cutoff).values_list("rid", flat=True).distinct()
+    )
+    return JsonResponse(
+        {
+            "onlines": [x for x in ids if x in online],
+            "offlines": [x for x in ids if x not in online],
+        }
+    )
+
+
 def device_groups(request):
     """GET /api/device-group/accessible?current&pageSize -> {total, data}"""
     token, user = _auth(request)
@@ -937,6 +986,10 @@ def console_oauth_start(request):
         op=provider.op[:64],
         code_verifier=verifier[:128],
     )
+    if request.GET.get("next") == "/web/":
+        request.session["oidc_console_next"] = "/web/"
+    else:
+        request.session.pop("oidc_console_next", None)
     oidc.cleanup_expired()
     response = HttpResponseRedirect(url)
     response.set_cookie(
@@ -994,11 +1047,13 @@ def oidc_callback(request):
         row.delete()
         return oidc.render_page("登录失败", "无法完成登录，请重试或联系管理员。", 400)
     if is_console:
-        # 控制台流程：建立浏览器会话后回控制台；OidcLogin 行只用于本次握手，用完即删。
+        # 控制台流程：建立浏览器会话后回控制台（或白名单 /web/）；OidcLogin 行用完即删。
         row.delete()
+        next_url = request.session.pop("oidc_console_next", "")
+        target = "/web/" if next_url == "/web/" else "/console/"
         auth_login(request, user, backend="django.contrib.auth.backends.ModelBackend")
         UserProfile.objects.filter(pk=user.pk).update(last_login=timezone.now())
-        response = HttpResponseRedirect("/console/")
+        response = HttpResponseRedirect(target)
         response.delete_cookie(CONSOLE_STATE_COOKIE, path="/")
         return response
     row.completed_at = timezone.now()
@@ -1079,7 +1134,7 @@ def health(request):
 
     # 版本/数据库/缓存/调试信息只给本机或持有 HEALTH_TOKEN 的监控；公网只暴露状态。
     token = getattr(settings, "HEALTH_TOKEN", "")
-    import ipaddress
+    from django.utils.crypto import constant_time_compare
 
     from api import throttle
 
@@ -1093,7 +1148,8 @@ def health(request):
         internal = any(addr in net for net in private_nets)
     except ValueError:
         internal = False
-    privileged = internal or (bool(token) and request.headers.get("X-Health-Token") == token)
+    header_token = request.headers.get("X-Health-Token", "")
+    privileged = internal or (bool(token) and bool(header_token) and constant_time_compare(header_token, token))
     if not privileged:
         return JsonResponse({"status": status}, status=200 if db_ok else 503)
 
@@ -1106,3 +1162,91 @@ def health(request):
         "debug": bool(settings.DEBUG),
     }
     return JsonResponse(payload, status=200 if db_ok else 503)
+
+
+def _default_webclient_id_server(request):
+    """未显式配置 ID_SERVER 时推导网页远控的默认信令地址。
+
+    Web 核心对不带协议的 IP 字面量会把端口 +2（21116 -> 21118），对不带协议的域名会
+    直接走 /ws/id 并丢弃非标准端口；只有显式 ws(s):// 地址才能把 IP 或非默认端口
+    准确路由到同源反代的 /ws/id。
+    """
+    host = request.get_host()
+    parsed = urlsplit(f"http://{host}")
+    hostname = parsed.hostname or ""
+    has_port = parsed.port is not None
+    try:
+        ipaddress.ip_address(hostname)
+        is_ip = True
+    except ValueError:
+        is_ip = False
+
+    if getattr(settings, "INTERNAL_PROXY", False) or getattr(settings, "BEHIND_PROXY", False):
+        if is_ip or has_port:
+            scheme = "wss" if request.is_secure() else "ws"
+            return f"{scheme}://{host}"
+        return host
+
+    # 免安装包 / 直连 Django（无同源 /ws/id 反代）：去掉 HTTP 端口（如 21114），
+    # 让 Web 核心按默认协议直接连接同机 hbbs 的 21118。
+    if has_port and hostname:
+        return f"[{hostname}]" if ":" in hostname else hostname
+    return host
+
+
+def webclient_config(request):
+    """网页远控的运行时配置（/api/webclient/config.js 与 /web/rd-config.js）。
+
+    仅向已登录且启用的控制台会话下发：
+    - 避免匿名抓取 RUSTDESK_KEY 或跨站 XSSI 读取内网配置；
+    - 随配置下发当前会话绑定的 RustDesk Bearer 令牌与用户信息，Web 客户端自动复用控制台登录态。
+    """
+    if request.method not in ("GET", "HEAD"):
+        return HttpResponse(status=405)
+
+    from api.webclient import ensure_web_token
+
+    user = getattr(request, "user", None)
+    if user is None or not user.is_authenticated or not user.is_active:
+        resp = HttpResponse(
+            "/* unauthorized */\n",
+            status=401,
+            content_type="application/javascript; charset=utf-8",
+        )
+        resp["Cache-Control"] = "no-store"
+        resp["X-Content-Type-Options"] = "nosniff"
+        resp["Cross-Origin-Resource-Policy"] = "same-origin"
+        return resp
+
+    id_server = settings.ID_SERVER or _default_webclient_id_server(request)
+    # build_absolute_uri 会保留非 443/80 的端口；直接拼 host 会让本地 21114/21205 部署把 API 指到 80。
+    api_server = settings.API_SERVER or request.build_absolute_uri("/").rstrip("/")
+    web_token = ensure_web_token(request, user)
+    payload = {
+        "force": True,
+        "idServer": id_server,
+        "apiServer": api_server,
+        "relayServer": settings.RELAY_SERVER,
+        "key": settings.RUSTDESK_KEY,
+        "accessToken": web_token.access_token,
+        "userInfo": _user_json(user),
+        "authCheckUrl": "/api/webclient/auth",
+        "loginUrl": "/console/?next=/web/",
+        "sessionId": web_token.rid,
+    }
+    serialized = (
+        json.dumps(payload, ensure_ascii=False)
+        .replace("<", "\\u003c")
+        .replace(">", "\\u003e")
+        .replace("&", "\\u0026")
+        .replace("\u2028", "\\u2028")
+        .replace("\u2029", "\\u2029")
+    )
+    response = HttpResponse(
+        "window.RD_CONFIG = " + serialized + ";\n",
+        content_type="application/javascript; charset=utf-8",
+    )
+    response["Cache-Control"] = "no-store"
+    response["X-Content-Type-Options"] = "nosniff"
+    response["Cross-Origin-Resource-Policy"] = "same-origin"
+    return response
