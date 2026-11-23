@@ -138,18 +138,19 @@ def _prepare_environment(home: Path) -> Path:
 
 
 def main() -> int:
+    # 英文 Windows 控制台默认 cp1252，必须在任何中文输出（含 _ensure_webclient）之前切换为 UTF-8。
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            try:
+                stream.reconfigure(encoding="utf-8", errors="replace")
+            except Exception:
+                pass
+
     home = _app_home()
     if not getattr(sys, "frozen", False):
         sys.path.insert(0, str(home))
     home = _prepare_environment(home)
     os.environ.setdefault("DJANGO_SETTINGS_MODULE", "rustdesk_server_api.settings")
-
-    if hasattr(sys.stdout, "reconfigure"):
-        try:
-            sys.stdout.reconfigure(encoding="utf-8")
-            sys.stderr.reconfigure(encoding="utf-8")
-        except Exception:
-            pass
 
     import django
 
@@ -166,6 +167,7 @@ def main() -> int:
 
         from rustdesk_server_api.wsgi import application
 
+        host = os.environ.get("HOST", "0.0.0.0")
         port = int(os.environ.get("PORT", "21114"))
         threads = int(os.environ.get("WEB_THREADS", "8"))
         console_url = f"http://127.0.0.1:{port}/console/"
@@ -212,7 +214,7 @@ def main() -> int:
             else:
                 print("[rustdesk-api] 未检测到桌面环境，请手动用浏览器打开上面的控制台地址。", flush=True)
 
-        serve(application, host="0.0.0.0", port=port, threads=threads)
+        serve(application, host=host, port=port, threads=threads)
     except KeyboardInterrupt:
         print("\n[rustdesk-api] 已停止")
     except OSError as exc:
