@@ -14,7 +14,7 @@ export default defineConfig({
     },
   },
   build: {
-    outDir: 'dist',
+    outDir: '../static/console',
     emptyOutDir: true,
     chunkSizeWarningLimit: 1500,
   },

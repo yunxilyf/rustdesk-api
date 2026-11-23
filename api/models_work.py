@@ -1,5 +1,11 @@
-from django.db import models
-from django.contrib import admin
+import datetime
+
+from django.contrib import admin, messages
+from django.db import models, transaction
+from django.shortcuts import get_object_or_404, redirect, render
+from django.urls import path, reverse
+from django.utils import timezone
+from django.utils.html import format_html
 from django.utils.translation import gettext as _
 
 
@@ -86,6 +92,9 @@ class RustDesDevice(models.Model):
     version = models.CharField(verbose_name=_("客户端版本"), max_length=100)
     create_time = models.DateTimeField(verbose_name=_("设备注册时间"), auto_now_add=True)
     update_time = models.DateTimeField(verbose_name=("设备更新时间"), auto_now=True, blank=True)
+    reregister_until = models.DateTimeField(verbose_name=_("允许重新登记截止"), null=True, blank=True)
+    pending_uuid = models.CharField(verbose_name=_("待确认的新 uuid"), max_length=100, blank=True)
+    pending_at = models.DateTimeField(verbose_name=_("待确认时间"), null=True, blank=True)
 
     class Meta:
         ordering = ("-rid",)
@@ -96,10 +105,91 @@ class RustDesDevice(models.Model):
         ]
 
 
+def approve_pending_uuid(device_id, expected_uuid):
+    """确认管理员在页面上核对过的候选 uuid；候选变化、窗口过期或无候选都返回 False。"""
+    expected = str(expected_uuid or "")
+    if not expected:
+        return False
+    with transaction.atomic():
+        row = RustDesDevice.objects.select_for_update().filter(pk=device_id).first()
+        if row is None or not row.pending_uuid or row.pending_uuid != expected:
+            return False
+        if row.reregister_until is None or row.reregister_until < timezone.now():
+            return False
+        row.uuid = expected
+        row.pending_uuid = ""
+        row.pending_at = None
+        row.reregister_until = None
+        row.save(update_fields=["uuid", "pending_uuid", "pending_at", "reregister_until"])
+        return True
+
+
 class RustDesDeviceAdmin(admin.ModelAdmin):
-    list_display = ("rid", "hostname", "memory", "uuid", "version", "create_time", "update_time")
+    list_display = (
+        "rid",
+        "hostname",
+        "memory",
+        "uuid",
+        "pending_uuid",
+        "reregister_confirm",
+        "version",
+        "update_time",
+        "reregister_until",
+    )
     search_fields = ("hostname", "memory")
     list_filter = ("rid",)
+    actions = ("allow_reregister",)
+
+    @admin.action(description=_("允许所选设备重新登记（10 分钟）"))
+    def allow_reregister(self, request, queryset):
+        """设备重装会换 uuid，客户端后台上报不带令牌，这里开一个短期窗口接收新身份。"""
+        until = timezone.now() + datetime.timedelta(minutes=10)
+        updated = queryset.update(reregister_until=until, pending_uuid="", pending_at=None)
+        self.message_user(request, _("已允许 %(count)d 台设备在 10 分钟内重新登记。") % {"count": updated})
+
+    def get_urls(self):
+        urls = super().get_urls()
+        custom = [
+            path(
+                "<path:object_id>/confirm-reregister/",
+                self.admin_site.admin_view(self.confirm_reregister_view),
+                name="api_rustdesdevice_confirm_reregister",
+            )
+        ]
+        return custom + urls
+
+    @admin.display(description=_("待确认身份"))
+    def reregister_confirm(self, obj):
+        if not obj.pending_uuid:
+            return "-"
+        url = reverse("admin:api_rustdesdevice_confirm_reregister", args=[obj.pk])
+        return format_html('<a class="button" href="{}">{}</a>', url, _("核对并确认…"))
+
+    def confirm_reregister_view(self, request, object_id):
+        """确认页展示候选 uuid，并在提交时校验候选未被替换。"""
+        device = get_object_or_404(RustDesDevice, pk=object_id)
+        changelist = reverse("admin:api_rustdesdevice_changelist")
+        if request.method == "POST":
+            expected = request.POST.get("pending_uuid", "")
+            if approve_pending_uuid(device.pk, expected):
+                self.message_user(request, _("已确认设备 %(rid)s 的新身份。") % {"rid": device.rid})
+                return redirect(changelist)
+            self.message_user(
+                request,
+                _("候选身份已变化或窗口已失效，请刷新后重新核对。"),
+                level=messages.ERROR,
+            )
+            return redirect(request.path)
+        if not device.pending_uuid:
+            self.message_user(request, _("该设备没有待确认的新身份。"), level=messages.WARNING)
+            return redirect(changelist)
+        context = {
+            **self.admin_site.each_context(request),
+            "opts": self.model._meta,
+            "device": device,
+            "title": _("确认设备新身份"),
+        }
+        return render(request, "admin/api/rustdesdevice/confirm_reregister.html", context)
 
 
 class ConnLog(models.Model):

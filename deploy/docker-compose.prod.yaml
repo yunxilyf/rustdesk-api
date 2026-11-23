@@ -2,12 +2,12 @@ services:
   rustdesk-api:
     build:
       context: ..
-      dockerfile: deploy/Dockerfile
+      dockerfile: Dockerfile
     image: ghcr.io/yunxilyf/rustdesk-api:latest
     container_name: rustdeskapi
     restart: unless-stopped
     ports:
-      - "21114:21114"
+      - "127.0.0.1:21114:21114"
     env_file:
       - ../.env
     environment:

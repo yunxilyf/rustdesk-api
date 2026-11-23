@@ -1,0 +1,22 @@
+{% extends "admin/base_site.html" %}
+{% load i18n %}
+
+{% block content %}
+<h1>{{ title }}</h1>
+<p>请核对以下信息。若“待确认的新 UUID”在页面打开后被其他请求改写，本次确认会被拒绝，需要刷新后重新核对。</p>
+<table>
+  <tr><th>设备 ID</th><td>{{ device.rid }}</td></tr>
+  <tr><th>当前 UUID</th><td><code>{{ device.uuid }}</code></td></tr>
+  <tr><th>待确认的新 UUID</th><td><code>{{ device.pending_uuid }}</code></td></tr>
+  <tr><th>待确认时间</th><td>{{ device.pending_at }}</td></tr>
+  <tr><th>窗口截止</th><td>{{ device.reregister_until }}</td></tr>
+</table>
+<form method="post">
+  {% csrf_token %}
+  <input type="hidden" name="pending_uuid" value="{{ device.pending_uuid }}">
+  <div class="submit-row">
+    <input type="submit" value="确认新身份" class="default">
+    <a href="{% url 'admin:api_rustdesdevice_changelist' %}" class="button cancel-link">取消</a>
+  </div>
+</form>
+{% endblock %}

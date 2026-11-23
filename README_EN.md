@@ -1,101 +1,78 @@
-# rustdesk-api-server
+# RustDesk API Server
 
-<p align="center">
-  <i>API server for self-hosted RustDesk (hbbs/hbbr): accounts, address books, devices, audit logs and an admin console</i>
-</p>
+Optional third-party sign-in with multiple providers side by side — generic OIDC (Keycloak, Authentik, Entra), Google, and GitHub — available from both the client and the console login page. With self-registration disabled, third-party sign-in can only reach existing accounts; see [docs/oidc.md](docs/oidc.md).
 
-<p align="center">
-  <img src="https://img.shields.io/badge/Version-1.0.0-blueviolet.svg" />
-  <img src="https://img.shields.io/badge/Python-3.12%2B-blue.svg" />
-  <img src="https://img.shields.io/badge/Django-6.1-0C4B33.svg" />
-  <img src="https://img.shields.io/badge/RustDesk-1.5.x-0A5BE0.svg" />
-  <img src="https://img.shields.io/badge/License-MIT-green.svg" />
-</p>
+[简体中文](README.md) · [Deployment guide](docs/deployment.md) · [Client API](docs/client_api_contract.md) · [Console API](docs/console_api.md)
 
-A Django implementation of the RustDesk API server, aligned with the 37 client method/path contracts (35 paths) used by
-RustDesk 1.5.x clients, plus a multi-tenant admin console built with Tencent TDesign (Vue 3 + Vite).
+A Django API server and Vue/TDesign console for self-hosted RustDesk. It adds accounts, address books, device ownership, and connection and file audit logs to an existing hbbs/hbbr deployment.
 
-- **Client API**: login, address books (legacy + multi-address-book), device lists, heartbeat/sysinfo,
-  connection/file audit, switch grants, device deployment.
-- **Admin console**: devices and ownership, address books and colored tags, device groups, users and a
-  registration switch, connection/file logs, per-user data isolation.
-- **Deployment**: SQLite out of the box, optional PostgreSQL / MySQL 8.4, Docker image and production guide.
+[![CI](https://github.com/yunxilyf/rustdesk-api/actions/workflows/ci.yml/badge.svg)](https://github.com/yunxilyf/rustdesk-api/actions/workflows/ci.yml)
+![RustDesk 1.5.x](https://img.shields.io/badge/RustDesk-1.5.x-0A5BE0)
+[![MIT](https://img.shields.io/badge/License-MIT-green)](LICENSE)
 
-## Quick start
+![RustDesk API console](images/console_dashboard.png)
+
+## Run locally
+
+Use Python 3.12+ and Node.js 22.
 
 ```bash
-pip install -r requirements.txt
-python manage.py migrate
-python manage.py runserver 0.0.0.0:21114
-```
-
-Open `http://127.0.0.1:21114/console/`; the first visit creates the initial administrator.
-Point the RustDesk client's API server to `http://<host>:21114` (ID/relay servers still use hbbs/hbbr).
-
-## Docker
-
-Images are published to GHCR and Docker Hub (amd64 + arm64):
-
-- `ghcr.io/yunxilyf/rustdesk-api:latest`
-- `yunxi666/rustdesk-api:latest`
-
-Quick start with Compose (no build required):
-
-```bash
-mkdir rustdesk-api && cd rustdesk-api
-curl -fsSLO https://raw.githubusercontent.com/yunxilyf/rustdesk-api/main/deploy/docker-compose.quickstart.yml
-mv docker-compose.quickstart.yml docker-compose.yml
-cat > .env <<'EOF'
-DEBUG=0
-SECRET_KEY=replace-with-a-random-string
-ALLOWED_HOSTS=*
-CSRF_TRUSTED_ORIGINS=http://127.0.0.1:21114
-HTTPS=0
-BEHIND_PROXY=0
-ALLOW_REGISTRATION=0
-EOF
-docker compose up -d
-curl http://127.0.0.1:21114/api/health
-```
-
-Open `http://<host>:21114/console/` to create the first administrator.
-Set `CSRF_TRUSTED_ORIGINS` to the real URL you use, otherwise console writes return 403.
-
-To build from source instead:
-
-```bash
-git clone https://github.com/yunxilyf/rustdesk-api.git
-cd rustdesk-api
+python -m pip install -r requirements.txt
 cp .env.example .env
-docker compose -f deploy/docker-compose.prod.yaml up -d --build
+python -c "import secrets; print('SECRET_KEY=' + secrets.token_urlsafe(50))"
 ```
 
-See [docs/deployment.md](docs/deployment.md) for nginx, HTTPS, systemd/gunicorn and backup.
-
-## Documentation
-
-- [Client API contract](docs/client_api_contract.md)
-- [Console API](docs/console_api.md)
-- [Deployment guide](docs/deployment.md)
-- [Testing matrix](docs/testing.md)
-
-## Testing
+Save the generated setting in `.env`. On PowerShell, use `Copy-Item .env.example .env` to copy the sample. The administrator command prompts for a password.
 
 ```bash
-python manage.py test api.tests -v 1   # unit / integration tests
-node e2e/console_e2e.js               # optional browser E2E (Chrome/Chromium)
+python manage.py migrate
+python manage.py ensure_admin
+npm --prefix frontend ci
+npm --prefix frontend run build
+python manage.py runserver 127.0.0.1:21114
 ```
 
-## Credits
+Open the [console](http://127.0.0.1:21114/console/) and sign in with the new account. The RustDesk client uses this service as its API server. Its ID and relay settings still point to hbbs/hbbr.
 
-- [RustDesk](https://github.com/rustdesk/rustdesk) for the open-source client and server. The API
-  contracts in this project were derived from observing the behaviour of its client source code.
-- The RustDesk community.
+## Deploy with Compose
 
-This is an independent implementation: the API service, admin console and deployment scripts were
-written from scratch against the RustDesk 1.5.x client behaviour and contain no third-party
-API-server code.
+The published Linux amd64 and arm64 images include the built console.
 
-## License
+| Registry | Image |
+| --- | --- |
+| GHCR | `ghcr.io/yunxilyf/rustdesk-api:latest` |
+| Docker Hub | `yunxi666/rustdesk-api:latest` |
 
-Released under the [MIT License](LICENSE).
+Save the [Compose template](deploy/docker-compose.quickstart.yml) as `docker-compose.yml` and the [environment sample](.env.example) as `.env`. Set a random `SECRET_KEY`, then run the following commands.
+
+```bash
+mkdir -p data/db data/records data/logs
+docker compose up -d
+docker compose exec rustdesk-api python manage.py ensure_admin
+curl -fsS http://127.0.0.1:21114/api/health
+```
+
+The quickstart template publishes port 21114 on all interfaces for LAN trials; restrict it with a firewall or put it behind an HTTPS reverse proxy. `deploy/docker-compose.prod.yaml` binds to `127.0.0.1` only. For remote clients, set up an HTTPS reverse proxy and configure `ALLOWED_HOSTS`, `CSRF_TRUSTED_ORIGINS`, `HTTPS=1`, and `BEHIND_PROXY=1`.
+
+To build from source, configure `.env` in the checkout and run `docker compose -f deploy/docker-compose.prod.yaml up -d --build`. See the [deployment guide](docs/deployment.md) for database configuration, reverse proxy and backups.
+
+## Upgrade notes
+
+- Production needs a private random `SECRET_KEY`. Rotate any administrator password set using the old default.
+- Clients using old-format tokens need to sign in again. Requests carrying a valid Bearer token can renew it before expiry.
+- Use `ensure_admin` for initial setup. Web setup requires a separate `WEB_SETUP_TOKEN` while the database is empty.
+- Legacy server recording uploads are disabled. Switch-grant requests return a denial until signature verification is implemented.
+
+## Development
+
+```bash
+ruff check .
+ruff format --check .
+npm --prefix frontend run build
+```
+
+Frontend source and lockfiles are in `frontend/`. Vite writes the generated console to `static/console/`.
+
+## Credits and license
+
+This independent implementation follows the RustDesk 1.5.x client contracts. Thanks to [RustDesk](https://github.com/rustdesk/rustdesk) and its community. Released under the [MIT License](LICENSE).

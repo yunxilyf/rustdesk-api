@@ -14,6 +14,7 @@
           {{ item.title }}
         </t-menu-item>
       </t-menu>
+      <div class="aside-version muted">v{{ appVersion }}</div>
     </t-aside>
 
     <t-layout>
@@ -40,7 +41,7 @@
 </template>
 
 <script setup>
-import { computed, ref, watch } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { api } from '../api'
 import { clearUser, store } from '../store'
@@ -65,6 +66,17 @@ watch(
     active.value = path
   },
 )
+
+const appVersion = ref('')
+
+onMounted(async () => {
+  try {
+    const data = await api.getVersion()
+    appVersion.value = String(data.version || '').replace(/^v/, '')
+  } catch (e) {
+    /* 版本号获取失败不影响使用 */
+  }
+})
 
 const currentTitle = computed(() => route.meta?.title || '')
 const displayName = computed(() => user.value?.display_name || user.value?.name || user.value?.username || '未登录')
@@ -96,6 +108,11 @@ async function onUserAction({ value }) {
 <style scoped>
 .app-layout {
   height: 100%;
+}
+
+.aside-version {
+  padding: 10px 20px 14px;
+  font-size: 12px;
 }
 
 .app-aside {

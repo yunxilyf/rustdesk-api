@@ -1,32 +1,13 @@
-"""客户端令牌工具与旧版注册 / 退出兼容入口。
-
-- ``getStrMd5`` / ``salt`` / ``EFFECTIVE_SECONDS``：客户端登录令牌签名；
-- ``user_action``：自助注册、退出两个 POST 动作（GET 一律跳转控制台）。
-"""
-
-import hashlib
+"""旧版注册、退出入口及控制台跳转。"""
 
 from django.conf import settings
 from django.contrib import auth
 from django.contrib.auth.hashers import make_password
-from django.db.models import Q
 from django.http import HttpResponseRedirect, JsonResponse
 from django.utils.translation import gettext as _
 
+from api import throttle
 from api.models import UserProfile
-
-salt = "xiaomo"
-EFFECTIVE_SECONDS = getattr(settings, "TOKEN_TTL_SECONDS", 7200)
-
-
-def getStrMd5(s):
-    if not isinstance(s, (str,)):
-        s = str(s)
-
-    myHash = hashlib.md5()
-    myHash.update(s.encode())
-
-    return myHash.hexdigest()
 
 
 def index(request):
@@ -61,12 +42,19 @@ def user_register(request):
     if not allow_registration():
         result["msg"] = _("当前未开放注册，请联系管理员！")
         return JsonResponse(result)
+    if not UserProfile.objects.exists():
+        result["msg"] = _("系统尚未初始化，请先创建管理员。")
+        return JsonResponse(result)
+    if throttle.too_many("register", request, settings.REGISTER_MAX_PER_HOUR, 3600):
+        result["msg"] = _("注册过于频繁，请稍后再试")
+        return JsonResponse(result, status=429)
+    throttle.hit("register", request, 3600)
 
     username = request.POST.get("user", "")
     password1 = request.POST.get("pwd", "")
 
-    if len(username) <= 3:
-        result["msg"] = _("用户名不得小于3位")
+    if not 3 <= len(username) <= 50:
+        result["msg"] = _("用户名长度需在 3~50 位之间")
         return JsonResponse(result)
 
     if len(password1) < 8 or len(password1) > 20:
@@ -83,16 +71,13 @@ def user_register(request):
             result["msg"] = " ".join(exc.messages)
             return JsonResponse(result)
 
-    if UserProfile.objects.filter(Q(username=username)).exists():
+    if UserProfile.objects.filter(username=username).exists():
         result["msg"] = _("用户名已存在。")
         return JsonResponse(result)
 
-    first = not UserProfile.objects.exists()
     UserProfile.objects.create(
         username=username,
         password=make_password(password1),
-        is_admin=first,
-        is_superuser=first,
         is_active=True,
     )
     result["code"] = 1

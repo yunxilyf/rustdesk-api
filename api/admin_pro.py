@@ -14,8 +14,10 @@ from api.models_pro import (
     DeviceGroup,
     DeviceGroupPeer,
     DeviceRecord,
+    OauthProvider,
     SwitchGrant,
     SystemSetting,
+    UserOauth,
 )
 
 
@@ -91,3 +93,24 @@ admin.site.register(DeviceGroupPeer)
 class SystemSettingAdmin(admin.ModelAdmin):
     list_display = ("key", "value", "updated_at")
     search_fields = ("key",)
+
+
+@admin.register(OauthProvider)
+class OauthProviderAdmin(admin.ModelAdmin):
+    """第三方登录配置。日常改配置走控制台，这里用于排障与批量修正。"""
+
+    list_display = ("op", "name", "oauth_type", "enabled", "sort", "updated_at")
+    list_filter = ("oauth_type", "enabled")
+    search_fields = ("op", "name", "client_id")
+    ordering = ("sort", "id")
+
+
+@admin.register(UserOauth)
+class UserOauthAdmin(admin.ModelAdmin):
+    """第三方身份与本地账号的绑定关系；换绑需先删这里的记录。"""
+
+    list_display = ("user", "op", "openid", "created_at")
+    list_filter = ("op",)
+    search_fields = ("openid", "user__username")
+    raw_id_fields = ("user",)
+    ordering = ("-id",)

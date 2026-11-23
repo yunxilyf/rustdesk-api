@@ -5,10 +5,25 @@
 布尔值接受 1/true/yes/on（不区分大小写），其余视为 False。
 """
 
+import hashlib
 import os
+
+_LEGACY_SECRET_DIGEST = "7cdea2def2fe4cd893bb70a43bc9623706c42d06e5b3cad206eb67ce5b0c46da"
 
 _TRUE = {"1", "true", "yes", "y", "on"}
 _FALSE = {"0", "false", "no", "n", "off", ""}
+
+
+def is_valid_secret_key(value):
+    """Reject placeholders, low-entropy strings and the key published by older versions."""
+    if not isinstance(value, str) or len(value) < 50 or len(set(value)) < 10:
+        return False
+    if value.startswith("django-insecure-"):
+        return False
+    lowered = value.lower()
+    if any(word in lowered for word in ("changeme", "change-me", "secret-key", "secretkey", "password")):
+        return False
+    return hashlib.sha256(value.encode()).hexdigest() != _LEGACY_SECRET_DIGEST
 
 
 def env_str(name, default=""):

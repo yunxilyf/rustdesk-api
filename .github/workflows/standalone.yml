@@ -1,0 +1,125 @@
+name: standalone
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: build-${{ matrix.artifact }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-22.04
+            artifact: linux-x86_64
+            archive: rustdesk-api-server-linux-x86_64.tar.gz
+          - os: windows-2022
+            artifact: windows-x64
+            archive: rustdesk-api-server-windows-x64.zip
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Build console
+        shell: bash
+        run: |
+          npm ci --prefix frontend
+          npm run build --prefix frontend
+
+      - name: Install build dependencies
+        shell: bash
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r deploy/requirements-standalone.txt
+
+      - name: Collect Django static files
+        shell: bash
+        run: |
+          export SECRET_KEY="$(python -c "import secrets; print(secrets.token_urlsafe(50))")"
+          python manage.py collectstatic --noinput
+
+      - name: Build single-file executable
+        shell: bash
+        run: pyinstaller --noconfirm --clean deploy/rustdesk-api.spec
+
+      - name: Assemble package
+        shell: bash
+        run: |
+          cp deploy/README-STANDALONE.md .env.example LICENSE dist/rustdesk-api-server/
+          VERSION="$(python -c "import version; print(version.APP_VERSION.lstrip('v'))")"
+          ARCHIVE="rustdesk-api-server-${VERSION}-${{ matrix.artifact }}.tar.gz"
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            ARCHIVE="rustdesk-api-server-${VERSION}-${{ matrix.artifact }}.zip"
+          fi
+          cd dist
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            powershell -NoProfile -Command "Compress-Archive -Path rustdesk-api-server -DestinationPath ${ARCHIVE} -Force"
+          else
+            tar -czf "${ARCHIVE}" rustdesk-api-server
+          fi
+          sha256sum "${ARCHIVE}" > "${ARCHIVE}.sha256" 2>/dev/null || certutil -hashfile "${ARCHIVE}" SHA256 > "${ARCHIVE}.sha256"
+          echo "ARCHIVE=${ARCHIVE}" >> "$GITHUB_ENV"
+
+      - name: Smoke test executable
+        shell: bash
+        run: |
+          mkdir -p smoke && cd smoke
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            ../dist/rustdesk-api-server/rustdesk-api-server.exe &
+          else
+            ../dist/rustdesk-api-server/rustdesk-api-server &
+          fi
+          pid=$!
+          for i in $(seq 1 40); do
+            if curl -fsS "http://127.0.0.1:21114/api/health" > health.json 2>/dev/null; then
+              cat health.json
+              break
+            fi
+            sleep 2
+          done
+          curl -fsS "http://127.0.0.1:21114/api/health"
+          curl -fsS -o /dev/null "http://127.0.0.1:21114/console/"
+          kill $pid 2>/dev/null || taskkill //F //IM rustdesk-api-server.exe || true
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rustdesk-api-server-${{ matrix.artifact }}
+          path: |
+            dist/rustdesk-api-server-*-${{ matrix.artifact }}.*
+          if-no-files-found: error
+
+  release:
+    name: attach-release-assets
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: build
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Show artifacts
+        run: ls -lh artifacts
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/*
+          fail_on_unmatched_files: true

@@ -10,11 +10,14 @@
 
 import json
 import os
+import re
 
 from django.conf import settings
 from django.core.cache import cache
 from django.core.management.base import BaseCommand
 from django.db import connections
+
+from rustdesk_server_api.env import is_valid_secret_key
 
 
 class Command(BaseCommand):
@@ -57,11 +60,8 @@ class Command(BaseCommand):
         return {"name": name, "level": level, "detail": detail}
 
     def _secret_key(self):
-        default = "j%7yjvygpih=6b%qf!q%&ixpn+27dngzdu-i3xh-^3xgy3^nnc"
-        if settings.SECRET_KEY == default:
-            return self._item("SECRET_KEY", "FAIL", "仍在使用仓库默认值，生产必须通过环境变量替换")
-        if len(settings.SECRET_KEY) < 32:
-            return self._item("SECRET_KEY", "WARN", "长度偏短（建议 ≥50 字符随机串）")
+        if not is_valid_secret_key(settings.SECRET_KEY):
+            return self._item("SECRET_KEY", "FAIL", "请配置长度至少 50 字符的随机密钥")
         return self._item("SECRET_KEY", "OK", "已自定义（长度 %d）" % len(settings.SECRET_KEY))
 
     def _allowed_hosts(self):
@@ -114,9 +114,31 @@ class Command(BaseCommand):
         return {"name": name, "level": "OK", "detail": path}
 
     def _console(self):
-        index_path = os.path.join(str(settings.BASE_DIR), "static", "console", "index.html")
+        root = os.path.join(str(settings.BASE_DIR), "static", "console")
+        index_path = os.path.join(root, "index.html")
         if not os.path.exists(index_path):
-            return self._item("控制台", "WARN", "static/console/index.html 不存在，需构建前端")
+            return self._item("控制台", "WARN", "请运行 npm --prefix frontend run build 构建控制台")
+        try:
+            with open(index_path, encoding="utf-8") as handle:
+                html = handle.read()
+        except OSError as exc:
+            return self._item("控制台", "FAIL", "无法读取 index.html：%s" % exc)
+        refs = re.findall(r'(?:src|href)="([^"]+)"', html)
+        missing = []
+        for ref in refs:
+            if ref.startswith(("http://", "https://", "//", "data:")):
+                continue
+            rel = ref.split("?")[0].split("#")[0].lstrip("/")
+            if rel.startswith("static/console/"):
+                rel = rel[len("static/console/") :]
+            if not os.path.exists(os.path.join(root, rel)):
+                missing.append(ref)
+        if missing:
+            return self._item(
+                "控制台",
+                "FAIL",
+                "缺少构建资源 %d 个，请运行 npm --prefix frontend run build" % len(missing),
+            )
         return self._item("控制台", "OK", "static/console 已就绪")
 
     def _users(self):
@@ -125,7 +147,7 @@ class Command(BaseCommand):
         total = UserProfile.objects.count()
         admins = UserProfile.objects.filter(is_admin=True).count()
         if total == 0:
-            return self._item("账号", "WARN", "暂无用户，可通过 /console/ 初始化或 ensure_admin 创建")
+            return self._item("账号", "WARN", "暂无用户，请运行 python manage.py ensure_admin")
         if admins == 0:
             return self._item("账号", "FAIL", "有用户但没有管理员，请用 ensure_admin 补建")
         return self._item("账号", "OK", "%d 个用户，其中 %d 个管理员" % (total, admins))

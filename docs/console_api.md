@@ -17,13 +17,49 @@
 | POST | `/api/console/logout` | — | `{ok:true}` |
 | GET | `/api/console/me` | — | `{user:User}` |
 | PUT | `/api/console/me/password` | `{old, password}` | `{ok:true}` / 400 |
-| GET | `/api/console/setup` | — | `{ok:true, needs_setup:bool, allow_registration:bool}`（库中无用户时 needs_setup 为 true） |
-| POST | `/api/console/setup` | `{username, password}` | 仅库中无用户时创建首个管理员并登录；已初始化返回 403 |
+| GET | `/api/console/setup` | — | `{ok, needs_setup, web_setup_enabled, allow_registration}` |
+| POST | `/api/console/setup` | `{username, password, setup_token}` | 空库且部署初始化密钥有效时创建首个管理员并登录 |
 | POST | `/api/console/register` | `{username, password}` | 自助注册；受「允许注册」开关控制，关闭时返回 `{ok:false}`；用户名 3~50、密码≥8 |
-| GET | `/api/console/settings` | — | `{ok, allow_registration, is_admin}`（登录用户可读） |
-| PUT | `/api/console/settings` | `{allow_registration: bool}` | 管理员开关注册；非管理员 403 |
+| GET | `/api/console/login-options` | — | **匿名可读**；`{ok:true, providers:[{op, name, type}]}`，登录页据此渲染第三方登录按钮（`type` 取 `oidc`/`github`/`google`，用于挑图标与配色；只给 op、显示名与类型，不含 issuer/密钥；配置不完整或已停用的登录方式不会返回） |
+| GET | `/api/oidc/console/auth?op=<op>` | — | **匿名可读**；控制台第三方登录入口，302 跳转到提供方；成功后由 `/api/oidc/callback` 建立会话并 302 回 `/console/` |
+| GET | `/api/console/settings` | — | `{ok, allow_registration, is_admin}`；管理员额外带 `oidc:{enabled, providers:[Provider], redirect_uri}`（登录用户可读） |
+| GET | `/api/console/version` | — | `{ok, version, latest, update_available, release_url, error}`；GitHub 查询结果缓存 10 分钟，网络失败时 `error` 有值但不影响其它功能 |
+| PUT | `/api/console/settings` | `{allow_registration: bool, oidc?: {...}}` | 管理员开关注册 / 保存第三方登录方式；非管理员 403 |
 
 `User` = `{id, username, display_name, email, avatar, note, is_admin, is_active, status}`
+
+`Provider` = `{op, name, type, issuer, client_id, scopes, auto_register, pkce_enable, enabled, has_secret}`
+（`client_secret` 永不回传，只用 `has_secret` 表示是否已保存；`type` ∈ `oidc`/`google`/`github`）
+
+### 第三方登录配置
+
+`PUT /api/console/settings` 的 `oidc` 段有两种写法：
+
+- 新版（推荐）：`{"oidc": {"providers": [ {op, name?, type?, issuer?, client_id, client_secret?, scopes?, auto_register?, pkce_enable?, enabled?, sort?, clear_secret?}, ... ]}}`
+  —— **整表同步**：列表里没有的登录方式会被删除；`client_secret` 留空表示不修改，`clear_secret: true` 表示清空。
+- 旧版（兼容）：`{"oidc": {"issuer": ..., "client_id": ..., "client_secret": ..., "label": ...}}`，仅在数据库没有任何 `providers` 时作为回退生效。
+
+校验失败返回 400 + `{ok:false, msg}`，文案：`oidc.providers 必须是数组`、
+`每个登录方式必须是对象`、`登录方式缺少 op`、`登录方式 op 重复：<op>`、
+`登录方式 op 只能包含字母、数字、下划线和短横线：<op>`、`不支持的登录类型：<type>`、
+`issuer 必须是 http(s) 地址`、`<op> 缺少 issuer`、`<op> 缺少 client_id`、`<op> 缺少 client_secret`。
+
+`op` 是账号绑定的键，保存后不应再改（控制台对已保存的记录禁用了该输入框）；
+提交列表里没有的登录方式会被删除，`providers: []` 等于清空全部配置。
+
+### 控制台第三方登录
+
+登录页除了账号密码，还会用 `GET /api/console/login-options` 拉取可用的第三方登录方式，
+每个按钮直接跳转 `GET /api/oidc/console/auth?op=<op>`。这条链路与客户端共用同一份
+provider 配置和 `OidcLogin` 状态表，区别只有两点：
+
+- 回调基址取浏览器当前访问的域名（客户端则取上报的 `apiDomain`）；
+- 成功后建立控制台 Session 并 302 回 `/console/`，**不签发** RustDesk 客户端令牌。
+
+安全约束与客户端一致：state 5 分钟过期且一次性使用、按 IP 限流、停用账号拒绝登录；
+控制台流程额外把 state 绑定到 HttpOnly 的 `oidc_console_state` cookie，回调不匹配直接 400；
+**自动建号还要求「允许注册」开关为开**，管理员关闭注册后第三方授权只能登录已有账号。
+
 
 ## 用户（仅管理员）
 
@@ -40,10 +76,12 @@
 |---|---|---|
 | GET | `/api/console/devices?current&pageSize&keyword&status&user_id` | `status`: `online`/`offline`/空；→ `{total,list:[Device]}` |
 | PUT | `/api/console/devices/<rid>/owner` | 管理员：`{user_id}` 绑定设备归属；`user_id=null` 解除 |
-| DELETE | `/api/console/devices/<rid>` | 管理员：解除归属（不删遥测数据） |
+| DELETE | `/api/console/devices/<rid>/owner` | 管理员：解除设备归属 |
 
 `Device` = `{rid, hostname, username, os, cpu, memory, version, update_time, online:bool, owner, owner_id}`
 在线判定：`update_time` 在 `DEVICE_ONLINE_SECONDS`（默认 300 秒）内。
+
+普通用户可查询管理员分配给自己的设备及关联日志。地址簿联系人只提供联系记录。
 
 ## 地址簿
 
@@ -100,7 +138,7 @@
 
 ## 前端工程约定
 
-- 目录：`frontend/`（Vite 项目），`npm run build` 产物 `frontend/dist`
+- 在 `frontend/` 下运行 `npm run build`，产物写入 `static/console/`。
 - 依赖：`vue@3`、`vue-router@4`、`tdesign-vue-next`、`tdesign-icons-vue-next`、`vite`、`@vitejs/plugin-vue`
 - 开发代理：`/api` → `http://127.0.0.1:21114`
 - 路由：`/console/` 用 hash 路由（`createWebHashHistory`），避免 Django 端 404

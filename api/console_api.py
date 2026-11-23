@@ -10,28 +10,38 @@
 import datetime
 import json
 import os
+import re
+import urllib.request
 import uuid as uuidlib
 
 from django.conf import settings
-from django.contrib.auth import authenticate, login as auth_login, logout as auth_logout
+from django.contrib.auth import authenticate
+from django.contrib.auth import login as auth_login
+from django.contrib.auth import logout as auth_logout
 from django.contrib.auth.password_validation import validate_password
+from django.core.cache import cache
 from django.core.exceptions import ValidationError
+from django.db import transaction
 from django.db.models import OuterRef, Q, Subquery
-from django.http import HttpResponse, JsonResponse, FileResponse
+from django.http import FileResponse, HttpResponse, JsonResponse
 from django.utils import timezone
+from django.utils.crypto import constant_time_compare
 from django.views.decorators.csrf import ensure_csrf_cookie
 
-from api.models_user import UserProfile
-from api.models_work import ConnLog, FileLog, RustDeskPeer, RustDesDevice
+from api import throttle, views_pro
 from api.models_pro import (
     AddressBook,
     AddressBookPeer,
     AddressBookTag,
     DeviceGroup,
     DeviceGroupPeer,
+    OauthProvider,
+    SystemSetting,
 )
+from api.models_user import UserProfile
+from api.models_work import ConnLog, FileLog, RustDesDevice, RustDeskPeer, RustDeskToken
 from api.tag_colors import normalize_color
-from api import throttle, views_pro
+from version import APP_VERSION
 
 
 def password_problem(password, user=None):
@@ -139,10 +149,7 @@ def _my_rids(user):
     """返回用户名下的 rid 列表；管理员返回 None 表示不限。"""
     if user.is_admin:
         return None
-    rids = set(RustDeskPeer.objects.filter(uid=str(user.id)).values_list("rid", flat=True))
-    rids |= set(AddressBookPeer.objects.filter(ab__owner=user).values_list("rid", flat=True))
-    rids |= set(AddressBookPeer.objects.filter(ab__rule__gt=0).values_list("rid", flat=True))
-    return rids
+    return views_pro.owned_device_ids(user)
 
 
 def _device_owner_map():
@@ -250,30 +257,59 @@ def group_json(group):
 
 
 # ---------------------------------------------------------------- 认证
+@ensure_csrf_cookie
 def setup(request):
-    """首次初始化：库中没有任何用户时允许创建第一个管理员。"""
-    if request.method == "GET":
-        from api.settings_store import allow_registration
+    """仅允许持有部署方初始化密钥的人创建首个管理员。"""
+    from api.settings_store import allow_registration
 
+    setup_token = settings.WEB_SETUP_TOKEN
+    setup_enabled = len(setup_token) >= 32
+    needs_setup = not UserProfile.objects.exists()
+    if request.method == "GET":
         return JsonResponse(
             {
                 "ok": True,
-                "needs_setup": UserProfile.objects.count() == 0,
+                "needs_setup": needs_setup,
+                "web_setup_enabled": setup_enabled and needs_setup,
                 "allow_registration": allow_registration(),
             }
         )
     if request.method != "POST":
         return _fail("请求方式错误", 405)
-    if UserProfile.objects.count() > 0:
+    if not needs_setup:
         return _fail("系统已初始化", 403)
+    if throttle.too_many("setup", request, settings.SETUP_MAX_PER_HOUR, 3600):
+        return _fail("尝试次数过多，请稍后再试", 429)
     data = _json_body(request)
-    username = (data.get("username") or "").strip()
+    provided_token = data.get("setup_token")
+    if (
+        not setup_enabled
+        or not isinstance(provided_token, str)
+        or not constant_time_compare(provided_token, setup_token)
+    ):
+        throttle.hit("setup", request, 3600)
+        return _fail("需要有效的部署初始化密钥", 403)
+    username = data.get("username") or ""
     password = data.get("password") or ""
-    if not username or len(password) < 6:
-        return _fail("用户名不能为空，密码至少 6 位", 400)
-    user = UserProfile.objects.create_superuser(username=username, password=password)
-    user.display_name = data.get("display_name") or username
-    user.save()
+    if not isinstance(username, str) or not isinstance(password, str):
+        return _fail("用户名或密码格式错误")
+    username = username.strip()
+    if not 3 <= len(username) <= 50 or len(password) < 8:
+        return _fail("用户名长度需在 3~50 位之间，密码至少 8 位")
+    problem = password_problem(password, UserProfile(username=username))
+    if problem:
+        return _fail(problem)
+    display_name = data.get("display_name") or username
+    if not isinstance(display_name, str) or len(display_name) > 64:
+        return _fail("显示名最多 64 个字符")
+
+    with transaction.atomic():
+        _, claimed = SystemSetting.objects.get_or_create(key="web_setup_completed")
+        if not claimed or UserProfile.objects.exists():
+            return _fail("系统已初始化", 403)
+        user = UserProfile.objects.create_superuser(username=username, password=password)
+        user.display_name = display_name
+        user.save(update_fields=["display_name"])
     auth_login(request, user)
     return JsonResponse({"ok": True, "user": user_json(user)})
 
@@ -288,6 +324,9 @@ def register(request):
         return _fail("当前未开放注册，请联系管理员")
     if UserProfile.objects.count() == 0:
         return _fail("系统尚未初始化，请先创建管理员")
+    if throttle.too_many("register", request, settings.REGISTER_MAX_PER_HOUR, 3600):
+        return _fail("注册过于频繁，请稍后再试", 429)
+    throttle.hit("register", request, 3600)
     data = _json_body(request)
     username = (data.get("username") or "").strip()
     password = data.get("password") or ""
@@ -329,7 +368,22 @@ def console_login(request):
     return JsonResponse({"ok": True, "user": user_json(user)})
 
 
+def console_login_options(request):
+    """GET /api/console/login-options：登录页可用的第三方登录方式（匿名可读）。
+
+    只回 op 与显示名，前端拼成 `/api/oidc/console/auth?op=<op>` 的跳转链接，
+    不放 issuer / client_id / secret 等配置细节。
+    """
+    from api import oauth
+
+    if request.method != "GET":
+        return _fail("请求方式错误", 405)
+    return JsonResponse({"ok": True, "providers": oauth.console_options()})
+
+
 def console_logout(request):
+    if request.method != "POST":
+        return _fail("请求方式错误", 405)
     auth_logout(request)
     return _ok()
 
@@ -370,7 +424,66 @@ def _update_own_profile(request, user):
     return JsonResponse({"ok": True, "user": user_json(user)})
 
 
+GITHUB_REPO = "yunxilyf/rustdesk-api"
+LATEST_RELEASE_CACHE = "console:latest-release"
+LATEST_RELEASE_TTL = 600
+
+
+def _semver(value):
+    """把 v1.2.3 / 1.2.3 转成可比较的元组。"""
+    numbers = re.findall(r"\d+", (value or "").lstrip("v"))
+    return tuple(int(n) for n in numbers[:3]) or (0,)
+
+
+def _latest_release():
+    """读取 GitHub 最新 Release；失败时返回带 error 的结果并缓存，避免频繁重试。"""
+    cached = cache.get(LATEST_RELEASE_CACHE)
+    if cached is not None:
+        return cached
+    result = {"tag": "", "url": "", "error": ""}
+    try:
+        request = urllib.request.Request(
+            f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest",
+            headers={
+                "Accept": "application/vnd.github+json",
+                "User-Agent": "rustdesk-api-console",
+            },
+        )
+        with urllib.request.urlopen(request, timeout=4) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+        result["tag"] = (payload.get("tag_name") or "").strip()
+        release_url = (payload.get("html_url") or "").strip()
+        # 只接受 GitHub 的 https 链接，避免把不可信 scheme 塞进前端 href。
+        result["url"] = release_url if release_url.startswith("https://github.com/") else ""
+    except Exception as exc:  # 网络不可达时不影响控制台其它功能
+        result["error"] = str(exc)[:200]
+    cache.set(LATEST_RELEASE_CACHE, result, LATEST_RELEASE_TTL)
+    return result
+
+
 @login_required_json
+def console_version(request):
+    """返回当前版本，并尝试检查 GitHub 上是否有更新（结果缓存 10 分钟）。"""
+    if request.method != "GET":
+        return _fail("请求方式错误", status=405)
+    latest = _latest_release()
+    current = APP_VERSION.lstrip("v")
+    latest_tag = latest["tag"].lstrip("v")
+    update_available = bool(latest_tag) and _semver(latest_tag) > _semver(current)
+    return JsonResponse(
+        {
+            "ok": True,
+            "version": APP_VERSION,
+            "latest": latest["tag"],
+            "update_available": update_available,
+            "release_url": latest["url"],
+            "error": latest["error"],
+        }
+    )
+
+
+@login_required_json
+@transaction.atomic
 def console_password(request):
     if request.method != "PUT":
         return _fail("请求方式错误", 405)
@@ -385,7 +498,8 @@ def console_password(request):
     if problem:
         return _fail(problem)
     user.set_password(new)
-    user.save()
+    user.save(update_fields=["password"])
+    RustDeskToken.objects.filter(uid=user.pk).delete()
     return _ok()
 
 
@@ -460,13 +574,20 @@ def user_detail(request, uid):
             if problem:
                 return _fail(problem)
             user.set_password(password)
-        user.save()
+        with transaction.atomic():
+            user.save()
+            if password or not user.is_active:
+                RustDeskToken.objects.filter(uid=user.pk).delete()
         return _ok()
 
     if request.method == "DELETE":
         if user.id == request.console_user.id:
             return _fail("不能删除自己")
-        user.delete()
+        with transaction.atomic():
+            RustDeskToken.objects.filter(uid=user.pk).delete()
+            # RustDeskPeer.uid 是字符串、没有外键，不清理会让设备永久处于“已归属”状态。
+            RustDeskPeer.objects.filter(uid=str(user.pk)).delete()
+            user.delete()
         return _ok()
 
     return _fail("请求方式错误", 405)
@@ -484,7 +605,7 @@ def devices(request):
     qs = RustDesDevice.objects.filter(id=_latest_device_subquery())
     rids = _my_rids(user)
     if rids is not None:
-        qs = qs.filter(rid__in=list(rids))
+        qs = qs.filter(rid__in=rids)
     keyword = (request.GET.get("keyword") or "").strip()
     if keyword:
         qs = qs.filter(
@@ -534,7 +655,7 @@ def _bind_device(user, rid):
 
 
 def _ensure_personal_ab(user):
-    ab = AddressBook.objects.filter(owner=user, is_personal=True).first()
+    ab = AddressBook.objects.filter(owner=user, is_personal=True).order_by("id").first()
     if ab is None:
         ab = AddressBook.objects.create(
             guid=uuidlib.uuid4().hex,
@@ -547,6 +668,7 @@ def _ensure_personal_ab(user):
 
 
 @admin_required_json
+@transaction.atomic
 def device_owner(request, rid):
     if request.method not in ("PUT", "DELETE"):
         return _fail("请求方式错误", 405)
@@ -608,7 +730,8 @@ def addressbooks(request):
             owner=owner,
             name=name,
             note=(data.get("note") or "")[:200],
-            rule=int(data.get("rule") or 0),
+            # 0=私有 1=只读 2=读写 3=完全控制；越界值归一到合法范围。
+            rule=max(0, min(3, int(data.get("rule") or 0))),
             is_personal=False,
         )
         return _ok(guid=ab.guid)
@@ -638,7 +761,8 @@ def addressbook_detail(request, guid):
         if "note" in data:
             ab.note = (data.get("note") or "")[:200]
         if "rule" in data:
-            ab.rule = int(data.get("rule") or 0)
+            # 0=私有 1=只读 2=读写 3=完全控制；越界值归一到合法范围。
+            ab.rule = max(0, min(3, int(data.get("rule") or 0)))
         ab.save()
         return _ok()
     if request.method == "DELETE":
@@ -668,7 +792,7 @@ def ab_peers(request, guid):
                 | Q(hostname__icontains=keyword)
                 | Q(username__icontains=keyword)
             )
-        dev_info = views_pro._device_info_map()
+        dev_info = views_pro._device_info_map(request.console_user)
         return _paginate(request, qs, lambda p: ab_peer_json(p, dev_info.get(p.rid)))
 
     if not user.is_admin and ab.owner_id != user.id:
@@ -796,6 +920,8 @@ def groups(request):
         owner = user
         if user.is_admin and data.get("owner_id"):
             owner = UserProfile.objects.filter(id=data.get("owner_id")).first()
+        if DeviceGroup.objects.filter(owner=owner, name=name[:64]).exists():
+            return _fail("分组名称已存在", 400)
         group = DeviceGroup.objects.create(
             guid=uuidlib.uuid4().hex,
             owner=owner,
@@ -822,6 +948,8 @@ def group_detail(request, guid):
             name = (data.get("name") or "").strip()
             if not name:
                 return _fail("分组名称不能为空")
+            if name[:64] != group.name and DeviceGroup.objects.filter(owner=group.owner, name=name[:64]).exists():
+                return _fail("分组名称已存在", 400)
             group.name = name[:64]
         if "note" in data:
             group.note = (data.get("note") or "")[:200]
@@ -878,7 +1006,7 @@ def conn_logs(request):
     qs = ConnLog.objects.all()
     rids = _my_rids(user)
     if rids is not None:
-        qs = qs.filter(Q(rid__in=list(rids)) | Q(from_id__in=list(rids)))
+        qs = qs.filter(Q(rid__in=rids) | Q(from_id__in=rids))
     keyword = (request.GET.get("keyword") or "").strip()
     if keyword:
         qs = qs.filter(
@@ -919,7 +1047,7 @@ def file_logs(request):
     qs = FileLog.objects.all()
     rids = _my_rids(user)
     if rids is not None:
-        qs = qs.filter(Q(remote_id__in=list(rids)) | Q(user_id__in=list(rids)))
+        qs = qs.filter(Q(remote_id__in=rids) | Q(user_id__in=rids))
     keyword = (request.GET.get("keyword") or "").strip()
     if keyword:
         qs = qs.filter(Q(file__icontains=keyword) | Q(remote_id__icontains=keyword) | Q(user_ip__icontains=keyword))
@@ -951,9 +1079,9 @@ def stats(request):
     file_qs = FileLog.objects.all()
     ab_qs = _visible_abs(user)
     if rids is not None:
-        devices_qs = devices_qs.filter(rid__in=list(rids))
-        conn_qs = conn_qs.filter(Q(rid__in=list(rids)) | Q(from_id__in=list(rids)))
-        file_qs = file_qs.filter(Q(remote_id__in=list(rids)) | Q(user_id__in=list(rids)))
+        devices_qs = devices_qs.filter(rid__in=rids)
+        conn_qs = conn_qs.filter(Q(rid__in=rids) | Q(from_id__in=rids))
+        file_qs = file_qs.filter(Q(remote_id__in=rids) | Q(user_id__in=rids))
 
     today = timezone.now().replace(hour=0, minute=0, second=0, microsecond=0)
     peer_count = sum(ab.peers.count() for ab in ab_qs)
@@ -987,8 +1115,8 @@ def console_index(request):
         return HttpResponse(
             '<html><body style="font-family:sans-serif;padding:40px">'
             "<h3>控制台尚未构建</h3>"
-            "<p>请在 frontend/ 目录执行 <code>npm install &amp;&amp; npm run build</code>，"
-            "并把 dist 内容复制到 static/console/。</p></body></html>",
+            "<p>请在项目目录执行 <code>npm --prefix frontend ci</code>，"
+            "然后运行 <code>npm --prefix frontend run build</code>。</p></body></html>",
             content_type="text/html; charset=utf-8",
         )
     resp = FileResponse(open(index_path, "rb"), content_type="text/html; charset=utf-8")
@@ -999,22 +1127,160 @@ def console_index(request):
 
 
 # ---------------------------------------------------------------- 系统设置
+def _public_callback_url(request):
+    """回调地址展示：优先显式配置，其次按代理/HTTPS 部署推断。"""
+    configured = (getattr(settings, "OIDC_REDIRECT_URI", "") or "").strip()
+    if configured:
+        return configured
+    if getattr(settings, "HTTPS", False) or getattr(settings, "BEHIND_PROXY", False):
+        host = request.get_host().split(":", 1)[0]
+        return "https://{}/api/oidc/callback".format(host)
+    return request.build_absolute_uri("/api/oidc/callback")
+
+
+def _oidc_settings_payload(request):
+    from api import oauth
+
+    rows = OauthProvider.objects.order_by("sort", "id")
+    providers = [oauth.public_provider(row) for row in rows]
+    return {
+        "enabled": any(row["enabled"] for row in providers),
+        "providers": providers,
+        "redirect_uri": _public_callback_url(request),
+    }
+
+
+def _save_oauth_providers(items):
+    """按提交的列表整体同步登录方式；返回错误文案，成功返回 None。"""
+    from api import oauth
+
+    if not isinstance(items, list):
+        return "oidc.providers 必须是数组"
+    normalized = []
+    seen_ops = set()
+    for item in items:
+        if not isinstance(item, dict):
+            return "每个登录方式必须是对象"
+        op = str(item.get("op") or "").strip()[:32]
+        if not op:
+            return "登录方式缺少 op"
+        if not re.fullmatch(r"[A-Za-z0-9_-]{1,32}", op):
+            # 旧客户端把 op 拼进 "oidc/<op>" 里，含斜杠/空格会破坏解析。
+            return "登录方式 op 只能包含字母、数字、下划线和短横线：{}".format(op)
+        if op in seen_ops:
+            return "登录方式 op 重复：{}".format(op)
+        seen_ops.add(op)
+        oauth_type = str(item.get("type") or "oidc").strip().lower()
+        if oauth_type not in oauth.SUPPORTED_TYPES:
+            return "不支持的登录类型：{}".format(oauth_type)
+        issuer = str(item.get("issuer") or "").strip().rstrip("/")[:255]
+        if issuer and not issuer.startswith(("http://", "https://")):
+            return "issuer 必须是 http(s) 地址"
+        if oauth_type in ("oidc", "google") and not issuer:
+            return "{} 缺少 issuer".format(op)
+        client_id = str(item.get("client_id") or "").strip()[:255]
+        if not client_id:
+            return "{} 缺少 client_id".format(op)
+        try:
+            sort = int(item.get("sort") or 0)
+        except (TypeError, ValueError):
+            sort = 0
+        normalized.append(
+            {
+                "op": op,
+                "oauth_type": oauth_type,
+                "issuer": issuer,
+                "client_id": client_id,
+                "name": str(item.get("name") or "").strip()[:64],
+                "scopes": str(item.get("scopes") or "").strip()[:255],
+                "auto_register": bool(item.get("auto_register", True)),
+                "pkce_enable": bool(item.get("pkce_enable", True)),
+                "enabled": bool(item.get("enabled", True)),
+                "sort": sort,
+                "secret": str(item.get("client_secret") or "").strip()[:255],
+                "clear_secret": bool(item.get("clear_secret")),
+            }
+        )
+    existing = {row.op: row for row in OauthProvider.objects.all()}
+    for item in normalized:
+        if not item["secret"] and not item["clear_secret"]:
+            current = existing.get(item["op"])
+            if current is None or not (current.client_secret or "").strip():
+                return "{} 缺少 client_secret".format(item["op"])
+    with transaction.atomic():
+        for item in normalized:
+            row = existing.pop(item["op"], None) or OauthProvider(op=item["op"])
+            row.oauth_type = item["oauth_type"]
+            row.issuer = item["issuer"]
+            row.client_id = item["client_id"]
+            row.name = item["name"]
+            row.scopes = item["scopes"]
+            row.auto_register = item["auto_register"]
+            row.pkce_enable = item["pkce_enable"]
+            row.enabled = item["enabled"]
+            row.sort = item["sort"]
+            if item["secret"]:
+                row.client_secret = item["secret"]
+            elif item["clear_secret"]:
+                row.client_secret = ""
+            row.save()
+        for row in existing.values():
+            row.delete()
+    return None
+
+
 def console_settings(request):
-    """GET 读取公开设置（登录用户）；PUT 管理员修改。"""
+    """GET 读取公开设置（登录用户）；PUT 管理员修改（注册开关 + OIDC）。"""
     from api.settings_store import allow_registration, set_setting
 
     user = _current_user(request)
     if user is None:
         return _fail("未登录", 401)
     if request.method == "GET":
-        return _ok(allow_registration=allow_registration(), is_admin=bool(user.is_admin))
+        data = {"ok": True, "allow_registration": allow_registration(), "is_admin": bool(user.is_admin)}
+        if user.is_admin:
+            # OIDC 的 issuer/client_id/密钥状态只对管理员可见，普通用户不返回。
+            data["oidc"] = _oidc_settings_payload(request)
+        return JsonResponse(data)
     if request.method in ("PUT", "POST"):
         if not user.is_admin:
             return _fail("需要管理员权限", 403)
         data = _json_body(request)
-        value = data.get("allow_registration", None)
-        if not isinstance(value, bool):
-            return _fail("allow_registration 必须是布尔值")
-        set_setting("allow_registration", "1" if value else "0")
-        return _ok(allow_registration=value)
+        changed = False
+        if "allow_registration" in data:
+            value = data.get("allow_registration")
+            if not isinstance(value, bool):
+                return _fail("allow_registration 必须是布尔值")
+            set_setting("allow_registration", "1" if value else "0")
+            changed = True
+        oidc_data = data.get("oidc")
+        if oidc_data is not None:
+            if not isinstance(oidc_data, dict):
+                return _fail("oidc 必须是对象")
+            if "providers" in oidc_data:
+                error = _save_oauth_providers(oidc_data.get("providers"))
+                if error:
+                    return _fail(error)
+                changed = True
+            else:
+                # 兼容旧版单 IdP 配置（仅在数据库无 provider 时作为回退生效）。
+                if "issuer" in oidc_data:
+                    issuer = str(oidc_data.get("issuer") or "").strip().rstrip("/")[:255]
+                    if issuer and not issuer.startswith(("http://", "https://")):
+                        return _fail("OIDC issuer 必须是 http(s) 地址")
+                    set_setting("oidc_issuer", issuer)
+                if "client_id" in oidc_data:
+                    set_setting("oidc_client_id", str(oidc_data.get("client_id") or "").strip()[:255])
+                if "client_secret" in oidc_data:
+                    secret = str(oidc_data.get("client_secret") or "").strip()[:255]
+                    if secret:
+                        set_setting("oidc_client_secret", secret)
+                if oidc_data.get("clear_secret"):
+                    set_setting("oidc_client_secret", "")
+                if "label" in oidc_data:
+                    set_setting("oidc_label", str(oidc_data.get("label") or "").strip()[:32])
+                changed = True
+        if not changed:
+            return _fail("没有可更新的设置")
+        return _ok(allow_registration=allow_registration(), oidc=_oidc_settings_payload(request))
     return _fail("请求方式错误", 405)

@@ -1,63 +1,63 @@
-# Python
-*.pyc
-*.pyo
+# Local configuration and private deployment files
+/api/tests/
+/e2e/
+/docs/testing.md
+.env
+.env.*
+!.env.example
+/_dev/
+/_tmp/
+/_migrate/
+/_ops/
+/docs/local/
+*.pem
+*.key
+*.p12
+*.pfx
+
+# Databases, logs and recordings
+/data/
+/db/*
+!/db/.gitkeep
+/logs/
+/records/
+*.sqlite3
+*.sqlite3-*
+*.log
+smoke-report.json
+
+# Python caches, virtual environments and build output
+pip-*
+.tmp_*/
+__pycache__/
+*.py[cod]
 *.spec
+!deploy/rustdesk-api.spec
 *.c
 *.pyd
 *.so
-test.py
-__pycache__
+.venv*/
+venv/
+.ruff_cache/
+.pytest_cache/
+/build/
+/dist/
+/dist-/
+/dist_py38/
 
-# Documents
+# Frontend and Django static build output
+node_modules/
+/frontend/dist/
+/static/console/
+/static/admin/
+
+# Local scripts and editor files
+/tests/
 test
-
-
-# Files
+test.py
 *.bat
 server.ico
 start.py
-
-# Build
-build
-dist
-dist-
-dist_py38
-
-LICENSE.rst
-
-db/*.sqlite3
-!db/.gitkeep
 job2en.py
-
+LICENSE.rst
 新建文本文档.txt
-# Frontend
-frontend/node_modules/
-frontend/dist/
-
-# Runtime
-server.log
-
-# 冒烟测试产物
-smoke-server.log
-smoke-report.json
-server.log
-records/
-e2e/node_modules/
-.venv-audit/
-
-# 本地环境配置与运行日志
-.env
-logs/
-db/*-wal
-db/*-shm
-server.err.log
-
-# 迁移/运维临时文件（含服务器凭据，勿入库）
-_migrate/
-_ops/
-
-# collectstatic 产物
-static/admin/
-
-# 本地开发/验收脚本（不入库）
-_dev/

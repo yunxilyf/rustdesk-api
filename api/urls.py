@@ -1,9 +1,7 @@
 from django.urls import re_path as url
 from django.views.decorators.csrf import csrf_exempt
 
-from api import views
-from api import views_pro
-from api import console_api
+from api import console_api, views, views_pro
 
 
 def client(view):
@@ -20,7 +18,9 @@ urlpatterns = [
     url(r"^health/?$", client(views_pro.health)),
     url(r"^login-options/?$", client(views_pro.login_options)),
     url(r"^oidc/auth-query/?$", client(views_pro.oidc_auth_query)),
+    url(r"^oidc/console/auth/?$", client(views_pro.console_oauth_start)),
     url(r"^oidc/auth/?$", client(views_pro.oidc_auth)),
+    url(r"^oidc/callback/?$", client(views_pro.oidc_callback)),
     url(r"^login/?$", client(views.login)),
     url(r"^logout/?$", client(views.logout)),
     url(r"^currentUser/?$", client(views.currentUser)),
@@ -56,12 +56,14 @@ urlpatterns = [
     # ================= 控制台（TDesign 前端）JSON API（Session + CSRF） =================
     url(r"^console/setup/?$", console_api.setup),
     url(r"^console/register/?$", console_api.register),
+    url(r"^console/login-options/?$", console_api.console_login_options),
     url(r"^console/login/?$", console_api.console_login),
     url(r"^console/logout/?$", console_api.console_logout),
     url(r"^console/me/password/?$", console_api.console_password),
     url(r"^console/me/?$", console_api.console_me),
     url(r"^console/stats/?$", console_api.stats),
     url(r"^console/settings/?$", console_api.console_settings),
+    url(r"^console/version/?$", console_api.console_version),
     url(r"^console/users/?$", console_api.users),
     url(r"^console/users/(?P<uid>\d+)/?$", console_api.user_detail),
     url(r"^console/devices/?$", console_api.devices),
@@ -78,5 +80,6 @@ urlpatterns = [
     url(r"^console/logs/conn/?$", console_api.conn_logs),
     url(r"^console/logs/file/?$", console_api.file_logs),
     # 旧版注册/退出兼容入口；GET 请求统一 302 到控制台。
-    url(r"^user_action", client(views.user_action)),
+    # 客户端不携带 CSRF token，与其他客户端接口一致豁免；注册是否开放由运行时开关决定。
+    url(r"^user_action/?$", client(views.user_action)),
 ]

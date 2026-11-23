@@ -31,25 +31,32 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      - name: 解析标签
-        id: tags
-        run: |
-          if [ "${{ github.event_name }}" = "release" ]; then
-            echo "list=${{ github.event.release.tag_name }}" | sed 's/^list=v/list=/' >> "$GITHUB_OUTPUT"
-          else
-            echo "list=${{ inputs.tags }}" >> "$GITHUB_OUTPUT"
-          fi
-
       - name: 从 GHCR 复制到 Docker Hub
         env:
           SRC: ghcr.io/${{ github.repository }}
           DST: ${{ secrets.DOCKERHUB_USERNAME }}/rustdesk-api
+          REQUESTED_TAGS: ${{ inputs.tags }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
         run: |
           set -euo pipefail
-          IFS=',' read -ra TAGS <<< "${{ steps.tags.outputs.list }}"
-          for tag in "${TAGS[@]}"; do
-            tag="$(echo "$tag" | xargs)"
-            [ -z "$tag" ] && continue
+          tag_list="$REQUESTED_TAGS"
+          if [[ "$GITHUB_EVENT_NAME" == release ]]; then
+            tag_list="${RELEASE_TAG#v}"
+          fi
+          if [[ -z "$tag_list" || "$tag_list" == *$'\n'* || "$tag_list" == *, ]]; then
+            echo "Expected a comma-separated list of Docker tags." >&2
+            exit 1
+          fi
+          IFS=',' read -r -a tags <<< "$tag_list"
+          for i in "${!tags[@]}"; do
+            tag="$(printf '%s' "${tags[i]}" | sed -E 's/^[[:blank:]]+|[[:blank:]]+$//g')"
+            if [[ ! "$tag" =~ ^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$ ]]; then
+              echo "Invalid Docker tag at position $((i + 1))." >&2
+              exit 1
+            fi
+            tags[i]="$tag"
+          done
+          for tag in "${tags[@]}"; do
             echo "==> $SRC:$tag -> $DST:$tag"
             docker buildx imagetools create --tag "$DST:$tag" "$SRC:$tag"
           done

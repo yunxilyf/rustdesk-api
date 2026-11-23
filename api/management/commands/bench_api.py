@@ -49,7 +49,7 @@ class Command(BaseCommand):
         RustDesDevice.objects.create(
             rid=rid, uuid=uuid, hostname="BENCH", cpu="bench", memory="16G", os="Windows", version="1.5.3"
         )
-        token_value = secrets.token_hex(16)
+        token_value = secrets.token_urlsafe(32)
         RustDeskToken.objects.create(username=username, uid=str(user.id), rid=rid, uuid=uuid, access_token=token_value)
 
         body = json.dumps({"id": rid, "uuid": uuid, "ver": "1.5.3"})

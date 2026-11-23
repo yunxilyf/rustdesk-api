@@ -1,236 +1,116 @@
-# rustdesk-api-server
+# RustDesk API Server
 
-<p align="center">
-  <i>为自建 RustDesk（hbbs/hbbr）提供 API 服务：账号、地址簿、设备、审计与管理控制台</i>
-</p>
+[English](README_EN.md) · [部署指南](docs/deployment.md) · [客户端 API](docs/client_api_contract.md) · [控制台 API](docs/console_api.md) · [OIDC 登录](docs/oidc.md)
 
-<p align="center">
-  <img src="https://img.shields.io/badge/Version-1.0.0-blueviolet.svg" />
-  <img src="https://img.shields.io/badge/Python-3.12%2B-blue.svg" />
-  <img src="https://img.shields.io/badge/Django-6.1-0C4B33.svg" />
-  <img src="https://img.shields.io/badge/RustDesk-1.5.x-0A5BE0.svg" />
-  <img src="https://img.shields.io/badge/License-MIT-green.svg" />
-</p>
+为自建 RustDesk 提供账号、地址簿、设备与审计服务。API 由 Django 提供，管理控制台使用 Vue 3 和 TDesign。侧栏显示当前版本，设置页可一键检查 GitHub 上的新版本。
 
-一个用 Python / Django 实现的 RustDesk API 服务端，对齐 RustDesk 1.5.x 客户端的 37 个「方法 + 路径」契约（35 条路径），
-并提供一套基于腾讯 TDesign（Vue 3 + Vite）的管理控制台，支持多用户数据隔离。
+[![CI](https://github.com/yunxilyf/rustdesk-api/actions/workflows/ci.yml/badge.svg)](https://github.com/yunxilyf/rustdesk-api/actions/workflows/ci.yml)
+![Python 3.12+](https://img.shields.io/badge/Python-3.12%2B-3776AB)
+![RustDesk 1.5.x](https://img.shields.io/badge/RustDesk-1.5.x-0A5BE0)
+[![MIT](https://img.shields.io/badge/License-MIT-green)](LICENSE)
 
-- 客户端侧：登录、地址簿（新旧两代协议）、设备列表、心跳与系统信息、连接/文件审计、设备部署。
-- 管理侧：设备与归属、地址簿与标签、设备分组、用户与注册开关、连接/文件日志。
-- 部署侧：SQLite 开箱即用，可切 PostgreSQL / MySQL 8.4；Docker 镜像与生产部署文档齐备。
-
-## 架构
-
-```mermaid
-flowchart LR
-  C[RustDesk 客户端] -->|/api/* Bearer Token| D[Django 6.1]
-  B[浏览器 /console/] -->|/api/console/* Session + CSRF| D
-  D --> DB[(SQLite / PostgreSQL / MySQL 8.4)]
-  D --> S[static/console 构建产物]
-  D --> R[records / logs]
-```
-
-- 同一个 Django 应用同时提供两套接口：`/api/*` 给 RustDesk 客户端，`/api/console/*` 给控制台，二者共用模型与权限。
-- 控制台是 hash 路由 SPA，构建产物提交在 `static/console/`，不需要单独的前端服务器。
-- 多用户隔离：管理员看全量；普通用户看到自己名下设备、个人地址簿和 `rule > 0` 的共享地址簿。
-- 可选 nginx 终止 TLS 并反代到 `21114`；客户端与控制台同域，无需额外跨域配置。
-
-## 截图
+## 控制台
 
 | 概览 | 设备 |
 | --- | --- |
 | ![控制台概览](images/console_dashboard.png) | ![设备](images/console_devices.png) |
-
-| 地址簿 | 用户 |
-| --- | --- |
+| **地址簿** | **用户** |
 | ![地址簿](images/console_addressbook.png) | ![用户](images/console_users.png) |
 
-## 功能特性
+- **客户端**支持登录、个人与共享地址簿、设备上报、连接及文件审计，并兼容旧版单地址簿。
+- **管理员**可以管理账号、分配设备归属、设置共享地址簿、分组和注册权限。
+- **第三方登录（可选，可并存多个）**：标准 OIDC（Keycloak、Authentik、Entra 等）、Google、GitHub，客户端与控制台登录页都会并列显示按钮；关闭「允许注册」后第三方授权只能登录已有账号。配置见 [docs/oidc.md](docs/oidc.md)。
+- **存储**默认使用 SQLite。也支持 PostgreSQL 和 MySQL，多个工作进程可用 Redis 共享登录限流状态。
 
-- **完整的客户端 API**：37 个「方法 + 路径」组合，含 `login-options`、两代地址簿、`sysinfo`/`sysinfo_ver`/`heartbeat`、
-  `audit/conn|file|alarm`、`switch-grant`、`record`、`devices/cli`、`devices/deploy`。契约见
-  [docs/client_api_contract.md](docs/client_api_contract.md)。
-- **新版多地址簿**：个人簿 + 共享簿，规则分「私有 / 只读 / 读写 / 完全控制」，与客户端同一份数据。
-- **彩色标签**：使用 ARGB 颜色值，与客户端标签颜色完全一致。
-- **多用户隔离**：管理员看全量；普通用户只看到自己名下设备、个人地址簿和有权限的共享地址簿。
-- **首次初始化**：空库访问 `/console/` 时引导创建第一个管理员，之后可关闭自助注册。
-- **审计日志**：连接日志（含备注）、文件日志（文件名 / 大小 / 方向）。
-- **可运维**：`/api/health` 健康检查、`manage.py doctor` 发布自检、日志轮转、登录节流。
+```mermaid
+flowchart LR
+  C["RustDesk 客户端"] -->|客户端 API| D["Django"]
+  B["浏览器控制台"] -->|Session 和 CSRF| D
+  D --> DB[("SQLite / PostgreSQL / MySQL")]
+```
 
-## 快速开始（本地）
+API 服务独立于 RustDesk 的 ID 和中继服务器。客户端的 ID、Relay 配置继续指向 hbbs、hbbr。
+
+## 本地运行
+
+需要 Python 3.12+ 和 Node.js 22。先安装后端依赖并准备本地配置。
 
 ```bash
-# 1. 安装依赖（Python 3.12+）
-pip install -r requirements.txt
+python -m pip install -r requirements.txt
+cp .env.example .env
+python -c "import secrets; print('SECRET_KEY=' + secrets.token_urlsafe(50))"
+```
 
-# 2. 初始化数据库
+将生成的 `SECRET_KEY` 写入 `.env`。PowerShell 中可用 `Copy-Item .env.example .env` 复制配置。初始化管理员时：交互运行会提示输入密码；Docker/CI 等非交互场景会生成随机密码并打印一次。
+
+```bash
 python manage.py migrate
-
-# 3. 启动（默认 21114 端口）
-python manage.py runserver 0.0.0.0:21114
+python manage.py ensure_admin
+npm --prefix frontend ci
+npm --prefix frontend run build
+python manage.py runserver 127.0.0.1:21114
 ```
 
-打开 `http://127.0.0.1:21114/console/`，首次访问会进入「初始化控制台」页，创建的第一个账号即超级管理员。
-客户端「网络 → API 服务器」填写 `http://<服务器IP>:21114`（ID/中继服务器仍指向 hbbs/hbbr）。
+打开 [控制台](http://127.0.0.1:21114/console/) 并使用刚创建的账号登录。本地开发可在另一终端运行 `npm --prefix frontend run dev`，通过 Vite 代理访问 API。
 
-不需要控制台时，`/api/*` 可独立工作；控制台只是同一份数据的另一个入口。
+## 免安装运行包
 
-## Docker 部署
+不想装 Docker / Python 时，可直接下载 GitHub Releases 里的独立运行包：
 
-镜像由 GitHub Actions 自动构建，同时推送到 GHCR 与 Docker Hub（`linux/amd64` + `linux/arm64`）：
-推送 `main` 更新 `latest`，打 `v*` 标签生成语义化版本。
+- `rustdesk-api-server-<版本>-linux-x86_64.tar.gz`：解压后 `./rustdesk-api-server`
+- `rustdesk-api-server-<版本>-windows-x64.zip`：解压后双击 `rustdesk-api-server.exe`
 
-- GHCR：`ghcr.io/yunxilyf/rustdesk-api:latest`
-- Docker Hub：`yunxi666/rustdesk-api:latest`
+首次启动会在可执行文件旁创建 `data/` 并自动生成密钥，默认监听 `21114`；详见[独立运行说明](deploy/README-STANDALONE.md)。打 tag（`v*`）时 GitHub Actions 会自动构建并附到 Release。
 
-### 方式一：docker compose（推荐，免构建）
+## 容器部署
 
-**1. 准备编排文件**
+GitHub Actions 构建 Linux amd64 和 arm64 镜像。预构建镜像已包含控制台。
 
-```bash
-mkdir rustdesk-api && cd rustdesk-api
-curl -fsSLO https://raw.githubusercontent.com/yunxilyf/rustdesk-api/main/deploy/docker-compose.quickstart.yml
-mv docker-compose.quickstart.yml docker-compose.yml
-```
+| 镜像仓库 | 地址 |
+| --- | --- |
+| GHCR | `ghcr.io/yunxilyf/rustdesk-api:latest` |
+| Docker Hub | `yunxi666/rustdesk-api:latest` |
 
-**2. 创建 `.env`**
+下载 [Compose 模板](deploy/docker-compose.quickstart.yml) 和 [.env 示例](.env.example)，分别保存为 `docker-compose.yml` 和 `.env`。填好随机 `SECRET_KEY` 后执行以下命令。
 
 ```bash
-cat > .env <<'EOF'
-DEBUG=0
-SECRET_KEY=请替换为随机字符串
-ALLOWED_HOSTS=*
-CSRF_TRUSTED_ORIGINS=http://127.0.0.1:21114
-HTTPS=0
-BEHIND_PROXY=0
-ALLOW_REGISTRATION=0
-EOF
-```
-
-生成随机 `SECRET_KEY`：
-
-```bash
-python -c "import secrets; print(secrets.token_urlsafe(50))"
-```
-
-> 把 `CSRF_TRUSTED_ORIGINS` 改成实际访问地址（IP 或域名，带协议和端口），否则控制台的写操作会被 403。
-> 正式对外用 HTTPS 时，再按 `.env.example` 打开 `HTTPS=1`、`BEHIND_PROXY=1` 并填写域名。
-
-**3. 启动并验证**
-
-```bash
+mkdir -p data/db data/records data/logs
 docker compose up -d
-docker compose ps
-curl http://127.0.0.1:21114/api/health
+docker compose exec rustdesk-api python manage.py ensure_admin
+curl -fsS http://127.0.0.1:21114/api/health
 ```
 
-浏览器打开 `http://<服务器IP>:21114/console/`，首次访问会引导创建管理员账号。
-若需要开放自助注册，把 `.env` 里的 `ALLOW_REGISTRATION` 改为 `1` 后重启容器。
+快速开始模板把 21114 发布到所有网卡（`0.0.0.0`），便于内网试用；请用防火墙限制来源，或按部署指南前置 HTTPS 反向代理后再开放公网。生产模板 `deploy/docker-compose.prod.yaml` 默认只绑定 `127.0.0.1`。配置反向代理时设置 `ALLOWED_HOSTS`、`CSRF_TRUSTED_ORIGINS`、`HTTPS=1` 和 `BEHIND_PROXY=1`，并把客户端的 API 服务器指向该 HTTPS 地址。
 
-常用命令：
+从源码构建时，在仓库根目录准备 `.env`，然后运行 `docker compose -f deploy/docker-compose.prod.yaml up -d --build`。构建镜像会从 `frontend/` 生成控制台资源。详细配置见 [生产部署指南](docs/deployment.md)。
+
+## 从旧版升级
+
+- 生产启动需要部署方配置的随机 `SECRET_KEY`。使用过旧版默认管理员密码的实例，应轮换该密码。
+- 旧版 32 位客户端令牌不再兼容：升级后所有客户端需要重新登录一次，登录后签发新的随机令牌（43 位，30 天滑动续期）。
+- 管理员初次初始化使用 `ensure_admin`。需要从网页初始化时，先配置独立的 `WEB_SETUP_TOKEN`，完成后清除。
+- 历史录像上传已停用。切换授权在实现设备签名验证前返回拒绝。已有录像文件可继续作为历史数据归档。
+
+## 开发与验证
 
 ```bash
-docker compose pull && docker compose up -d   # 升级到最新镜像
-docker compose logs -f --tail=100             # 查看日志
-docker compose down                           # 停止（数据保留在 ./data）
+ruff check .
+ruff format --check .
+python manage.py check
+python manage.py doctor
+npm --prefix frontend run build
 ```
 
-数据目录：`./data/db`（SQLite 数据库）、`./data/records`、`./data/logs`。
-备份时复制 `./data/db/db.sqlite3` 即可。
+| 目录 | 内容 |
+| --- | --- |
+| `api/` | 客户端与控制台视图、设备权限、数据模型 |
+| `rustdesk_server_api/` | Django 项目配置和启动入口 |
+| `frontend/` | 控制台源码、图标和依赖锁文件 |
+| `deploy/` | 容器、反向代理和服务配置 |
+| `docs/` | API 契约与部署说明 |
 
-### 方式二：从源码构建
+控制台构建输出写入本地 `static/console/`，可由相同的前端源码和锁文件重新生成。测试代码由维护者本地保留，不随仓库分发。
 
-```bash
-git clone https://github.com/yunxilyf/rustdesk-api.git
-cd rustdesk-api
-cp .env.example .env                             # 修改 SECRET_KEY、ALLOWED_HOSTS
-docker compose -f deploy/docker-compose.prod.yaml up -d          # 使用已发布镜像
-# 或本地构建：
-docker compose -f deploy/docker-compose.prod.yaml up -d --build
-```
+## 致谢与许可
 
-直接使用 `docker build` 时必须显式指定 `-f deploy/Dockerfile`。
-
-生产环境的 nginx、HTTPS、systemd / gunicorn、备份与升级步骤，见
-[docs/deployment.md](docs/deployment.md)。
-
-## 环境变量
-
-完整列表与说明见 [docs/deployment.md](docs/deployment.md)，最常用的几项：
-
-| 变量 | 默认 | 说明 |
-| --- | --- | --- |
-| `DEBUG` | `0` | 生产必须为 0 |
-| `SECRET_KEY` | 内置开发值 | 生产必填，随机长字符串 |
-| `ALLOWED_HOSTS` | `*` | 逗号分隔，生产请填实际域名/IP |
-| `CSRF_TRUSTED_ORIGINS` | 本机地址 | 带协议与端口，HTTPS 站点填 `https://...` |
-| `HTTPS` / `BEHIND_PROXY` | `0` | 开启 Secure Cookie / HSTS / 信任反代头 |
-| `CACHE_URL` | 空 | Redis 地址；多进程部署必配，否则登录节流失效 |
-| `DATABASE_TYPE` | `SQLITE` | `SQLITE` / `POSTGRES` / `MYSQL` |
-| `DEVICE_ONLINE_SECONDS` | `300` | 在线判定窗口，需大于心跳写库间隔 |
-| `ALLOW_REGISTRATION` | `True` | 是否允许自助注册（控制台内也可随时开关） |
-
-## 测试与验收
-
-```bash
-python manage.py test api.tests -v 1   # 117 项单元 / 集成测试
-node e2e/console_e2e.js               # 浏览器 E2E（可选，需 Chrome/Chromium）
-```
-
-| 层 | 入口 | 用例数 | 覆盖 |
-| --- | --- | --- | --- |
-| L1 单元/集成 | `manage.py test api.tests` | 117 | 客户端契约、控制台 API、权限隔离、安全边界、CSRF、心跳写放大 |
-| L2 浏览器 E2E | `e2e/console_e2e.js` | 24 | 初始化/登录 → 菜单导航 → 退出，零 JS 错误 |
-
-CI 执行 `ruff check`、`manage.py check`、`migrate`、`ensure_admin`、`doctor`、`api.tests`，并对 `/api/health` 做冒烟。
-
-## 目录结构
-
-```text
-api/                     Django 应用：模型、视图、路由、测试
-  views_api.py           客户端核心接口（登录、地址簿、sysinfo、审计…）
-  views_pro.py           新版客户端接口（多地址簿、设备、分组、部署…）
-  console_api.py         控制台 JSON API（Session + CSRF）
-  models_pro.py          多地址簿 / 分组 / 切换授权 / 系统设置模型
-rustdesk_server_api/     项目配置（settings / urls / wsgi）
-frontend/                TDesign 控制台源码（Vue 3 + Vite）
-static/console/          控制台构建产物（随仓库提供）
-deploy/                  Dockerfile、compose、entrypoint、部署说明
-docs/                    API 契约、控制台 API、部署与测试文档
-e2e/                     Playwright 端到端脚本
-```
-
-## 兼容性与已知限制
-
-- 客户端基线：RustDesk 1.5.x（37 个接口组合），旧版 1.4.x / Sciter 客户端仍可使用 `/api/ab` 旧地址簿。
-- 未实现（客户端会静默降级）：心跳响应中的策略下发（`strategy`）、真实 OIDC 登录、共享地址簿的创建授权管理。
-- `/api/record` 已按协议实现，但 1.5.x 客户端不会上传录像（其 `record_upload` 开关未开启），录像只保存在被控端本地。
-- 收藏（fav）是客户端本地数据，不上报服务端。
-
-## 前端开发
-
-```bash
-cd frontend
-npm install
-npm run dev      # 代理 /api 到 127.0.0.1:21114
-npm run build    # 产物输出到 dist/
-rm -rf ../static/console && cp -r dist ../static/console
-```
-
-## 文档
-
-- [客户端 API 契约](docs/client_api_contract.md)
-- [控制台 API](docs/console_api.md)
-- [部署指南](docs/deployment.md)
-- [测试矩阵](docs/testing.md)
-
-## 致谢
-
-- 感谢 [RustDesk](https://github.com/rustdesk/rustdesk) 开源客户端与服务端；本项目的接口契约来自对其客户端源码的行为分析。
-- 感谢 RustDesk 社区。
-
-本项目为独立实现：接口服务、管理控制台与部署脚本均按 RustDesk 1.5.x 客户端行为重新编写，不包含第三方 API 服务端代码。
-
-## 许可证
-
-本项目采用 [MIT License](LICENSE) 开源。
+感谢 [RustDesk](https://github.com/rustdesk/rustdesk) 及社区。本项目依据 RustDesk 1.5.x 客户端行为独立实现 API 和控制台，采用 [MIT License](LICENSE)。

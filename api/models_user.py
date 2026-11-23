@@ -1,30 +1,20 @@
+from django.contrib.auth.models import AbstractBaseUser, BaseUserManager, PermissionsMixin
 from django.db import models
-from django.contrib.auth.models import BaseUserManager, AbstractBaseUser, PermissionsMixin
-from .models_work import *
 from django.utils.translation import gettext as _
 
 
 class MyUserManager(BaseUserManager):
-    def create_user(self, username, password=None):
+    def create_user(self, username, password=None, **fields):
         if not username:
             raise ValueError("Users must have an username")
 
-        user = self.model(
-            username=username,
-        )
-
+        user = self.model(username=username, **fields)
         user.set_password(password)
         user.save(using=self._db)
         return user
 
     def create_superuser(self, username, password):
-        user = self.create_user(
-            username,
-            password=password,
-        )
-        user.is_admin = True
-        user.save(using=self._db)
-        return user
+        return self.create_user(username, password, is_admin=True, is_superuser=True)
 
 
 class UserProfile(AbstractBaseUser, PermissionsMixin):
@@ -44,6 +34,8 @@ class UserProfile(AbstractBaseUser, PermissionsMixin):
     avatar = models.CharField(verbose_name=_("头像"), max_length=255, blank=True, default="")
     verifier = models.CharField(verbose_name=_("验证标识"), max_length=64, blank=True, default="")
     status = models.SmallIntegerField(verbose_name=_("状态"), default=1)
+    # OIDC 登录绑定：issuer 下不可变的 subject，用于多端复用一个本地账号。
+    oidc_subject = models.CharField(verbose_name=_("OIDC 主体"), max_length=255, blank=True, default="", db_index=True)
 
     is_active = models.BooleanField(verbose_name=_("是否激活"), default=True)
     is_admin = models.BooleanField(verbose_name=_("是否管理员"), default=False)
@@ -51,28 +43,22 @@ class UserProfile(AbstractBaseUser, PermissionsMixin):
     objects = MyUserManager()
 
     USERNAME_FIELD = "username"  # 用作用户名的字段
-    REQUIRED_FIELDS = ["password"]  # 必须填写的字段
+    REQUIRED_FIELDS = []
 
     def get_full_name(self):
-        # The user is identified by their email address
         return self.username
 
     def get_short_name(self):
-        # The user is identified by their email address
         return self.username
 
-    def __str__(self):  # __unicode__ on Python 2
+    def __str__(self):
         return self.username
 
-    def has_perm(self, perm, obj=None):  # 有没有指定的权限
-        "Does the user have a specific permission?"
-        # Simplest possible answer: Yes, always
-        return True
+    def has_perm(self, perm, obj=None):
+        return self.is_active and self.is_admin
 
     def has_module_perms(self, app_label):
-        "Does the user have permissions to view the app `app_label`?"
-        # Simplest possible answer: Yes, always
-        return True
+        return self.is_active and self.is_admin
 
     @property
     def is_staff(self):

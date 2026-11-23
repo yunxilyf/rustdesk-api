@@ -10,7 +10,7 @@ server {
     listen 80;
     server_name rd.example.com;
 
-    # 录像分片上传：客户端按 8MB 分片，留出余量
+    # 与 Django 的请求体上限配合。
     client_max_body_size 12m;
 
     location /static/ {

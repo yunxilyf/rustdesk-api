@@ -10,19 +10,20 @@
 """
 
 import json
-import os
-import re
+import logging
 import time
 import uuid
-import datetime
 
 from django.conf import settings
+from django.contrib.auth import login as auth_login
+from django.db import transaction
 from django.db.models import Q
-from django.http import HttpResponse, JsonResponse
+from django.http import HttpResponse, HttpResponseRedirect, JsonResponse
 from django.utils import timezone
 from django.utils.translation import gettext as _
 
-from .tag_colors import normalize_color
+from . import oauth, oidc, throttle
+from .client_auth import authenticate_client as _auth
 from .models import (
     AddressBook,
     AddressBookPeer,
@@ -30,16 +31,21 @@ from .models import (
     ConnLog,
     DeviceGroup,
     DeviceGroupPeer,
-    DeviceRecord,
+    OidcLogin,
     RustDesDevice,
     RustDeskPeer,
     RustDeskTag,
     RustDeskToken,
-    SwitchGrant,
     UserProfile,
 )
+from .tag_colors import normalize_color
+
+# 控制台第三方登录：state 必须与本浏览器绑定，否则攻击者可以把自己的回调链接
+# 发给受害者，让受害者在他自己的浏览器里登入攻击者的账号（登录 CSRF）。
+CONSOLE_STATE_COOKIE = "oidc_console_state"
 
 PAGE_SIZE_DEFAULT = 100
+logger = logging.getLogger(__name__)
 
 
 def _platform_from_os(os_name):
@@ -65,10 +71,13 @@ def _platform_from_os(os_name):
     return s
 
 
-def _device_info_map():
+def _device_info_map(user):
     """rid -> 最近一次 sysinfo 上报的 platform/hostname/username。"""
+    devices = RustDesDevice.objects.order_by("rid", "-update_time", "-id")
+    if not user.is_admin:
+        devices = devices.filter(rid__in=owned_device_ids(user))
     latest = {}
-    for d in RustDesDevice.objects.order_by("rid", "-update_time", "-id"):
+    for d in devices:
         latest.setdefault(d.rid, d)
     return {
         rid: {
@@ -106,40 +115,6 @@ def _body_any(request):
         return json.loads(raw)
     except Exception:
         return None
-
-
-def token_user(token):
-    """校验 token 是否仍有效，返回用户；无效时返回 None。
-
-    旧数据没有 expires_at：首次使用时补写一个完整有效期，让老客户端平滑升级，
-    之后按 expires_at 判断（不再永久有效）。
-    """
-    if not token:
-        return None
-    from .views_front import EFFECTIVE_SECONDS
-
-    now = timezone.now()
-    if token.expires_at is None:
-        token.expires_at = now + datetime.timedelta(seconds=EFFECTIVE_SECONDS)
-        token.save(update_fields=["expires_at"])
-    elif token.expires_at < now:
-        return None
-    return UserProfile.objects.filter(id=token.uid, is_active=True).first()
-
-
-def _auth(request):
-    """返回 (token, user)，未登录/过期时返回 (None, None)。"""
-    auth = request.META.get("HTTP_AUTHORIZATION", "") or ""
-    if auth.startswith("Bearer "):
-        auth = auth[len("Bearer ") :]
-    auth = auth.strip()
-    if not auth:
-        return None, None
-    token = RustDeskToken.objects.filter(access_token=auth).first()
-    user = token_user(token)
-    if not user:
-        return None, None
-    return token, user
 
 
 def _unauthorized():
@@ -188,7 +163,7 @@ def _empty_ok():
 
 
 def _personal_ab(user):
-    ab = AddressBook.objects.filter(owner=user, is_personal=True).first()
+    ab = AddressBook.objects.filter(owner=user, is_personal=True).order_by("id").first()
     if ab is None:
         ab = AddressBook.objects.create(
             guid=uuid.uuid4().hex,
@@ -203,14 +178,14 @@ def _accessible_abs(user):
     return AddressBook.objects.filter(Q(owner=user) | Q(rule__gt=0))
 
 
-def _get_ab(user, guid):
+def _get_ab(user, guid, *, write=False):
     """按 guid 取地址簿；guid 为空时取个人地址簿。"""
     if not guid:
         return _personal_ab(user)
     ab = AddressBook.objects.filter(guid=guid).first()
     if ab is None:
         return None
-    if ab.owner_id != user.id and ab.rule <= 0:
+    if ab.owner_id != user.id and ab.rule < (2 if write else 1):
         return None
     return ab
 
@@ -218,10 +193,13 @@ def _get_ab(user, guid):
 def _peer_json(peer, group_names=None, dev_info=None):
     tags = [t for t in (peer.tags or "").split(",") if t]
     info = (dev_info or {}).get(peer.rid) or {}
+    # 个人地址簿只同步个人连接密码哈希（hash），共享地址簿只同步共享密码（password）。
+    # 混用会让客户端把另一种凭据当成连接密码，甚至把密码写进个人簿。
+    personal = bool(peer.ab.is_personal)
     return {
         "id": peer.rid,
-        "hash": peer.rhash or "",
-        "password": peer.password or "",
+        "hash": (peer.rhash or "") if personal else "",
+        "password": "" if personal else (peer.password or ""),
         "username": peer.username or info.get("username", ""),
         "hostname": peer.hostname or info.get("hostname", ""),
         "platform": peer.platform or info.get("platform", ""),
@@ -233,7 +211,7 @@ def _peer_json(peer, group_names=None, dev_info=None):
         "forceAlwaysRelay": "false",
         "rdpPort": "",
         "rdpUsername": "",
-        "same_server": True,
+        "same_server": peer.rid in (dev_info or {}),
     }
 
 
@@ -277,7 +255,7 @@ def _tag_json(tag):
 
 def _legacy_to_ab(user):
     """把旧表里的地址簿数据迁移到 AddressBook，只在首次访问时执行。"""
-    ab = AddressBook.objects.filter(owner=user, is_personal=True).first()
+    ab = AddressBook.objects.filter(owner=user, is_personal=True).order_by("id").first()
     if ab is None:
         ab = AddressBook.objects.create(guid=uuid.uuid4().hex, owner=user, name=_("个人地址簿"), is_personal=True)
     old_tags = RustDeskTag.objects.filter(uid=str(user.id))
@@ -371,7 +349,7 @@ def ab_peers(request):
     current, page_size = _page_params(request)
     total, rows = _paginate(ab.peers.all().order_by("id"), current, page_size)
     group_names = _device_group_names(user)
-    dev_info = _device_info_map()
+    dev_info = _device_info_map(user)
     return JsonResponse({"total": total, "data": [_peer_json(p, group_names, dev_info) for p in rows]})
 
 
@@ -391,7 +369,7 @@ def ab_peer_add(request, guid):
     token, user = _auth(request)
     if user is None:
         return _unauthorized()
-    ab = _get_ab(user, guid)
+    ab = _get_ab(user, guid, write=True)
     if ab is None:
         return JsonResponse({"error": _("地址簿不存在")}, status=404)
     data = _body(request)
@@ -405,8 +383,8 @@ def ab_peer_add(request, guid):
         ab=ab,
         rid=rid,
         defaults={
-            "rhash": str(data.get("hash", "")),
-            "password": str(data.get("password", "")),
+            "rhash": str(data.get("hash", "")) if ab.is_personal else "",
+            "password": "" if ab.is_personal else str(data.get("password", "")),
             "username": str(data.get("username", "")),
             "hostname": str(data.get("hostname", "")),
             "platform": str(data.get("platform", "")),
@@ -417,7 +395,7 @@ def ab_peer_add(request, guid):
         },
     )
     if not created:
-        _apply_peer_fields(peer, data)
+        _apply_peer_fields(peer, data, ab.is_personal)
         peer.save()
     return _empty_ok()
 
@@ -427,7 +405,7 @@ def ab_peer_update(request, guid):
     token, user = _auth(request)
     if user is None:
         return _unauthorized()
-    ab = _get_ab(user, guid)
+    ab = _get_ab(user, guid, write=True)
     if ab is None:
         return JsonResponse({"error": _("地址簿不存在")}, status=404)
     data = _body(request)
@@ -435,16 +413,22 @@ def ab_peer_update(request, guid):
     peer = ab.peers.filter(rid=rid).first() if rid else None
     if peer is None:
         return JsonResponse({"error": _("设备不存在")}, status=404)
-    _apply_peer_fields(peer, data)
+    _apply_peer_fields(peer, data, ab.is_personal)
     peer.save()
     return _empty_ok()
 
 
-def _apply_peer_fields(peer, data):
-    if "hash" in data:
-        peer.rhash = str(data.get("hash") or "")
-    if "password" in data:
-        peer.password = str(data.get("password") or "")
+def _apply_peer_fields(peer, data, personal):
+    # 个人地址簿只接受 hash（个人连接密码哈希），共享地址簿只接受 password。
+    # 客户端本应在发送前自行剥离，这里再兜底一次，避免凭据串到错误字段。
+    if personal:
+        if "hash" in data:
+            peer.rhash = str(data.get("hash") or "")
+        peer.password = ""
+    else:
+        if "password" in data:
+            peer.password = str(data.get("password") or "")
+        peer.rhash = ""
     if "username" in data:
         peer.username = str(data.get("username") or "")
     if "hostname" in data:
@@ -470,7 +454,7 @@ def ab_peer_delete(request, guid):
     token, user = _auth(request)
     if user is None:
         return _unauthorized()
-    ab = _get_ab(user, guid)
+    ab = _get_ab(user, guid, write=True)
     if ab is None:
         return JsonResponse({"error": _("地址簿不存在")}, status=404)
     ids = _body_any(request)
@@ -484,13 +468,15 @@ def ab_tag_add(request, guid):
     token, user = _auth(request)
     if user is None:
         return _unauthorized()
-    ab = _get_ab(user, guid)
+    ab = _get_ab(user, guid, write=True)
     if ab is None:
         return JsonResponse({"error": _("地址簿不存在")}, status=404)
     data = _body(request)
     name = str(data.get("name", "")).strip()
     if not name:
         return JsonResponse({"error": _("缺少标签名")}, status=400)
+    if len(name) > 64:
+        return JsonResponse({"error": _("标签名过长")}, status=400)
     AddressBookTag.objects.update_or_create(
         ab=ab, name=name, defaults={"color": normalize_color(data.get("color"), name)}
     )
@@ -502,15 +488,21 @@ def ab_tag_rename(request, guid):
     token, user = _auth(request)
     if user is None:
         return _unauthorized()
-    ab = _get_ab(user, guid)
+    ab = _get_ab(user, guid, write=True)
     if ab is None:
         return JsonResponse({"error": _("地址簿不存在")}, status=404)
     data = _body(request)
-    old = str(data.get("old", ""))
-    new = str(data.get("new", ""))
+    old = str(data.get("old", "")).strip()
+    new = str(data.get("new", "")).strip()
+    if not new:
+        return JsonResponse({"error": _("缺少标签名")}, status=400)
+    if len(new) > 64:
+        return JsonResponse({"error": _("标签名过长")}, status=400)
     tag = ab.tags.filter(name=old).first()
     if tag is None:
         return JsonResponse({"error": _("标签不存在")}, status=404)
+    if new != old and ab.tags.filter(name=new).exists():
+        return JsonResponse({"error": _("标签名已存在")}, status=400)
     tag.name = new
     tag.save()
     for peer in ab.peers.all():
@@ -527,7 +519,7 @@ def ab_tag_update(request, guid):
     token, user = _auth(request)
     if user is None:
         return _unauthorized()
-    ab = _get_ab(user, guid)
+    ab = _get_ab(user, guid, write=True)
     if ab is None:
         return JsonResponse({"error": _("地址簿不存在")}, status=404)
     data = _body(request)
@@ -543,7 +535,7 @@ def ab_tag_delete(request, guid):
     token, user = _auth(request)
     if user is None:
         return _unauthorized()
-    ab = _get_ab(user, guid)
+    ab = _get_ab(user, guid, write=True)
     if ab is None:
         return JsonResponse({"error": _("地址簿不存在")}, status=404)
     names = _body_any(request)
@@ -562,6 +554,24 @@ def ab_tag_delete(request, guid):
 # --------------------------------------------------------------------------
 
 
+def owned_device_ids(user):
+    """设备归属由管理员分配，地址簿只保存联系人。"""
+    return RustDeskPeer.objects.filter(uid=str(user.pk)).values("rid")
+
+
+def device_is_assigned(rid):
+    return RustDeskPeer.objects.filter(rid=rid).exists()
+
+
+def can_manage_device(user, rid, token):
+    if user.is_admin or owned_device_ids(user).filter(rid=rid).exists():
+        return True
+    if not rid or token.rid != rid or not token.uuid or device_is_assigned(rid):
+        return False
+    uuid = RustDesDevice.objects.filter(rid=rid).order_by("-update_time", "-id").values_list("uuid", flat=True).first()
+    return uuid == token.uuid
+
+
 def _device_group_names(user):
     mapping = {}
     for m in DeviceGroupPeer.objects.filter(group__owner=user).select_related("group"):
@@ -578,7 +588,10 @@ def users(request):
     if user.is_admin:
         qs = UserProfile.objects.all().order_by("id")
     else:
-        qs = UserProfile.objects.filter(id=user.id)
+        # 客户端「设备分组」按 peer.loginName 过滤，用户列表里必须包含
+        # 共享地址簿的属主，否则普通用户看不到别人共享给自己的设备。
+        owner_ids = set(_accessible_abs(user).filter(rule__gt=0).values_list("owner_id", flat=True))
+        qs = UserProfile.objects.filter(Q(id=user.id) | Q(id__in=owner_ids), is_active=True).order_by("id")
     total, rows = _paginate(qs, current, page_size)
     return JsonResponse({"total": total, "data": [_user_json(u) for u in rows]})
 
@@ -606,19 +619,23 @@ def peers(request):
         owner = p.ab.owner
         if owner is not None:
             owner_by_rid.setdefault(p.rid, owner.username)
-    uid_names = {str(u.id): u.username for u in UserProfile.objects.all()}
-    for rid, uid in RustDeskPeer.objects.values_list("rid", "uid"):
+    bindings = RustDeskPeer.objects.all()
+    if user.is_admin:
+        uid_names = {str(u.id): u.username for u in UserProfile.objects.all()}
+    else:
+        bindings = bindings.filter(uid=str(user.pk))
+        uid_names = {str(user.pk): user.username}
+    for rid, uid in bindings.values_list("rid", "uid"):
         if rid not in owner_by_rid and uid in uid_names:
             owner_by_rid[rid] = uid_names[uid]
 
-    dev_info = _device_info_map()
+    dev_info = _device_info_map(user)
     data = [_peer_payload(p, group_names, owner_by_rid.get(p.rid, ""), dev_info) for p in rows]
-    visible_rids = set(owner_by_rid)
-    for dev in RustDesDevice.objects.all().order_by("-update_time"):
+    devices = RustDesDevice.objects.order_by("-update_time")
+    if not user.is_admin:
+        devices = devices.filter(rid__in=owned_device_ids(user))
+    for dev in devices:
         if dev.rid in seen:
-            continue
-        # 非管理员只看到自己/共享地址簿里的设备，未归属设备仅管理员可见
-        if not user.is_admin and dev.rid not in visible_rids:
             continue
         seen.add(dev.rid)
         data.append(
@@ -672,75 +689,30 @@ def device_groups(request):
 
 
 def switch_grant(request):
-    """POST /api/switch-grant，返回 {accepted, server_time}。"""
-    data = _body(request)
-    now = int(time.time())
-    rid = str(data.get("id", ""))
-    SwitchGrant.objects.create(
-        rid=rid,
-        verifier=str(data.get("switch_code_verifier", ""))[:128],
-        timestamp=str(data.get("timestamp", ""))[:32],
-        signature=str(data.get("signature", "")),
-    )
-    return JsonResponse({"accepted": True, "server_time": now})
+    """保留客户端响应协议，当前服务未实现签名校验。"""
+    return JsonResponse({"accepted": False, "server_time": int(time.time())})
 
 
 def record_upload(request):
-    """POST /api/record?type=new|part|tail|remove&file=&offset=&length="""
-    typ = request.GET.get("type", "")
-    filename = os.path.basename((request.GET.get("file", "") or "").replace("\\", "/"))
-    if not filename or filename in (".", ".."):
-        return JsonResponse({"error": "missing file"}, status=400)
-    # 只保留安全字符，避免路径穿越与非法文件名
-    filename = re.sub(r"[^0-9A-Za-z._\- ()\[\]]", "_", filename)[:200]
-    if filename.strip(". ") == "":
-        return JsonResponse({"error": "invalid file"}, status=400)
+    """为历史客户端保留路由，停用未认证的录像写入协议。"""
+    return JsonResponse({"error": _("服务端录像上传已停用")}, status=410)
 
-    record_dir = str(getattr(settings, "RECORD_ROOT", os.path.join(str(settings.BASE_DIR), "records")))
-    os.makedirs(record_dir, exist_ok=True)
-    path = os.path.join(record_dir, filename)
-    if typ in ("new", "part", "tail"):
-        # 这个接口没有认证（客户端协议如此），至少给目录设配额，避免被匿名写满磁盘。
-        quota = getattr(settings, "RECORD_MAX_TOTAL_MB", 2048) * 1024 * 1024
-        used = 0
-        for entry in os.scandir(record_dir):
-            if entry.is_file():
-                used += entry.stat().st_size
-        if used >= quota:
-            return JsonResponse({"error": "record storage quota exceeded"}, status=507)
-    # 先看 Content-Length，避免把超大请求体读进内存
-    try:
-        declared = int(request.META.get("CONTENT_LENGTH") or 0)
-    except (TypeError, ValueError):
-        declared = 0
-    if declared > 8 * 1024 * 1024:
-        return JsonResponse({"error": "chunk too large"}, status=413)
-    if request.body and len(request.body) > 8 * 1024 * 1024:
-        return JsonResponse({"error": "chunk too large"}, status=413)
 
-    if typ == "new":
-        DeviceRecord.objects.filter(file=filename).delete()
-        DeviceRecord.objects.create(file=filename, path=path, size=0)
-        with open(path, "wb") as f:
-            pass
-    elif typ in ("part", "tail"):
-        # part: offset 处续写；tail: offset=0 回写文件头（客户端用它标记上传完成）
-        try:
-            offset = int(request.GET.get("offset", 0) or 0)
-        except (TypeError, ValueError):
-            offset = 0
-        chunk = request.body or b""
-        mode = "r+b" if os.path.isfile(path) else "wb"
-        with open(path, mode) as f:
-            f.seek(offset)
-            f.write(chunk)
-        size = os.path.getsize(path)
-        DeviceRecord.objects.filter(file=filename).update(size=size)
-    elif typ == "remove":
-        if os.path.isfile(path):
-            os.remove(path)
-        DeviceRecord.objects.filter(file=filename).delete()
-    return JsonResponse({"code": 1})
+def _clean_display_name(value, label):
+    name = str(value or "").strip()
+    if not name:
+        return ""
+    if len(name) > 64 or any(ord(ch) < 32 for ch in name):
+        raise ValueError(label)
+    return name
+
+
+def _first_or_create(model, lookup, defaults=None):
+    """同名数据可能重复：按 id 取最早一条，避免 get_or_create 抛 MultipleObjectsReturned。"""
+    obj = model.objects.filter(**lookup).order_by("id").first()
+    if obj is not None:
+        return obj, False
+    return model.objects.create(**lookup, **(defaults or {})), True
 
 
 def devices_cli(request):
@@ -748,48 +720,70 @@ def devices_cli(request):
     token, user = _auth(request)
     if user is None:
         return _unauthorized()
+    if request.method != "POST":
+        return HttpResponse(status=405)
     data = _body(request)
     rid = str(data.get("id", "")).strip()
     if not rid:
         return JsonResponse({"error": "missing id"}, status=400)
+    rename = data.get("device_name") or data.get("device_username")
+    if rename and not can_manage_device(user, rid, token):
+        return JsonResponse({"error": _("没有修改该设备的权限")}, status=403)
 
     owner = user
     user_name = str(data.get("user_name", "")).strip()
     if user_name and user.is_admin:
         owner = UserProfile.objects.filter(username=user_name).first() or user
 
-    ab_name = str(data.get("address_book_name", "")).strip()
-    if ab_name:
-        ab = AddressBook.objects.filter(owner=owner, name=ab_name).first()
-        if ab is None:
-            ab = AddressBook.objects.create(guid=uuid.uuid4().hex, owner=owner, name=ab_name, is_personal=True)
-        peer, _created = AddressBookPeer.objects.get_or_create(ab=ab, rid=rid)
-        tag = str(data.get("address_book_tag", "")).strip()
-        if tag:
-            AddressBookTag.objects.get_or_create(ab=ab, name=tag)
-            peer.tags = tag
-        if data.get("address_book_alias"):
-            peer.alias = str(data["address_book_alias"])
-        if data.get("address_book_password"):
-            peer.rhash = str(data["address_book_password"])
-        if data.get("address_book_note"):
-            peer.note = str(data["address_book_note"])
-        peer.save()
+    # 先完成全部校验再落库，避免 400 响应留下半成品地址簿/分组。
+    try:
+        ab_name = _clean_display_name(data.get("address_book_name"), _("地址簿名称不合法"))
+        group_name = _clean_display_name(data.get("device_group_name"), _("分组名称不合法"))
+    except ValueError as exc:
+        return JsonResponse({"error": str(exc)}, status=400)
+    raw_password = str(data.get("address_book_password") or "").strip()
+    if len(raw_password) > 128:
+        return JsonResponse({"error": _("地址簿密码过长")}, status=400)
 
-    group_name = str(data.get("device_group_name", "")).strip()
-    if group_name:
-        group = DeviceGroup.objects.filter(owner=owner, name=group_name).first()
-        if group is None:
-            group = DeviceGroup.objects.create(guid=uuid.uuid4().hex, owner=owner, name=group_name)
-        DeviceGroupPeer.objects.get_or_create(group=group, rid=rid)
+    with transaction.atomic():
+        if ab_name:
+            ab, _created = _first_or_create(
+                AddressBook,
+                {"owner": owner, "name": ab_name, "is_personal": False},
+                {"guid": uuid.uuid4().hex, "rule": 2},
+            )
+            peer, _created = AddressBookPeer.objects.get_or_create(ab=ab, rid=rid)
+            tag = str(data.get("address_book_tag", "")).strip()
+            if tag:
+                AddressBookTag.objects.get_or_create(ab=ab, name=tag[:60])
+                # CLI 是“追加分配”，不能清掉设备在共享簿里已有的标签。
+                existing = [t for t in (peer.tags or "").split(",") if t]
+                if tag[:60] not in existing:
+                    existing.append(tag[:60])
+                peer.tags = ",".join(existing)[:255]
+            if data.get("address_book_alias"):
+                peer.alias = str(data["address_book_alias"])[:30]
+            if raw_password:
+                # CLI 指定的地址簿是共享簿，密码按共享密码存储（不是个人簿 hash）。
+                peer.password = raw_password[:128]
+            if data.get("address_book_note"):
+                peer.note = str(data["address_book_note"])
+            peer.save()
 
-    dev = RustDesDevice.objects.filter(rid=rid).first()
-    if dev:
-        if data.get("device_name"):
-            dev.hostname = str(data["device_name"])
-        if data.get("device_username"):
-            dev.username = str(data["device_username"])
-        dev.save()
+        if group_name:
+            group, _created = _first_or_create(
+                DeviceGroup, {"owner": owner, "name": group_name}, {"guid": uuid.uuid4().hex}
+            )
+            DeviceGroupPeer.objects.get_or_create(group=group, rid=rid)
+
+        if rename:
+            dev = RustDesDevice.objects.filter(rid=rid).order_by("-update_time", "-id").first()
+            if dev:
+                if data.get("device_name"):
+                    dev.hostname = str(data["device_name"])[:100]
+                if data.get("device_username"):
+                    dev.username = str(data["device_username"])[:100]
+                dev.save(update_fields=["hostname", "username"])
 
     # CLI 以“空正文”判定成功并打印 Done!
     return HttpResponse(status=200)
@@ -797,12 +791,28 @@ def devices_cli(request):
 
 def devices_deploy(request):
     """POST /api/devices/deploy  body {id, uuid, pk} -> {result: OK}"""
+    token, user = _auth(request)
+    if user is None:
+        return _unauthorized()
+    if request.method != "POST":
+        return HttpResponse(status=405)
     data = _body(request)
     rid = str(data.get("id", "")).strip()
     uuid_str = str(data.get("uuid", "")).strip()
     pk = str(data.get("pk", "")).strip()
-    if not rid or not uuid_str or not pk:
+    if not rid or not uuid_str or not pk or len(rid) > 60 or len(uuid_str) > 100:
         return JsonResponse({"result": "INVALID_INPUT"})
+    if not user.is_admin:
+        # 换 ID 时正文 id 是新 ID，令牌里的 rid 还是旧 ID：以 uuid 绑定同一台物理设备，
+        # 并要求旧 ID 确实归该用户，避免拿别人的设备令牌去抢注新 ID。
+        if token.uuid != uuid_str:
+            return JsonResponse({"result": "NOT_ENABLED"})
+        if token.rid != rid and not can_manage_device(user, token.rid, token):
+            return JsonResponse({"result": "NOT_ENABLED"})
+        if rid != token.rid and device_is_assigned(rid):
+            return JsonResponse({"result": "NOT_ENABLED"})
+    if device_is_assigned(rid) and not can_manage_device(user, rid, token):
+        return JsonResponse({"result": "NOT_ENABLED"})
     exists = RustDesDevice.objects.filter(rid=rid).exclude(uuid=uuid_str).first()
     if exists:
         return JsonResponse({"result": "ID_TAKEN"})
@@ -818,16 +828,184 @@ def devices_deploy(request):
 
 
 def login_options(request):
-    """GET /api/login-options -> JSON 数组（字符串）。"""
-    return JsonResponse([], safe=False)
+    """GET /api/login-options -> JSON 数组（字符串）。
+
+    可配置多个第三方登录：第一项固定 `common-oidc/<json>`（新客户端一次性渲染全部
+    按钮），其后每项 `oidc/<op>` 兼容只认单元素的旧客户端。
+    """
+    return JsonResponse(oauth.login_options(), safe=False)
 
 
 def oidc_auth(request):
-    return JsonResponse({"error": _("未配置 OIDC 登录")})
+    """POST /api/oidc/auth -> {code, url}；code 供客户端轮询。"""
+    if request.method != "POST":
+        return JsonResponse({"error": _("请求方式错误！")})
+    limit = getattr(settings, "OIDC_MAX_PER_HOUR", 60)
+    if throttle.too_many("oidc", request, limit, 3600):
+        return JsonResponse({"error": _("请求过于频繁，请稍后再试。")}, status=429)
+    throttle.hit("oidc", request, 3600)
+    providers = oauth.providers()
+    if not providers:
+        return JsonResponse({"error": _("未配置 OIDC 登录")})
+    try:
+        data = json.loads(request.body.decode() or "{}")
+    except ValueError:
+        return JsonResponse({"error": _("请求体不是合法的 JSON")})
+    if not isinstance(data, dict):
+        return JsonResponse({"error": _("请求体必须是 JSON 对象")})
+    rid = str(data.get("id") or "").strip()[:100]
+    if not rid:
+        return JsonResponse({"error": _("缺少设备 ID")})
+    op = str(data.get("op") or "").strip()[:64]
+    provider = oauth.provider_for(op)
+    if provider is None:
+        return JsonResponse({"error": _("登录方式不存在或已停用")})
+    api_domain = str(data.get("apiDomain") or "")
+    try:
+        state, verifier, url = oauth.begin_auth(provider, api_domain)
+    except oidc.OidcError as exc:
+        logger.warning("OIDC auth start failed: %s", exc)
+        return JsonResponse({"error": str(exc)})
+    OidcLogin.objects.create(
+        state=state[:64],
+        flow=OidcLogin.FLOW_CLIENT,
+        rid=rid,
+        uuid=str(data.get("uuid") or "")[:100],
+        api_domain=api_domain[:255],
+        op=provider.op[:64],
+        code_verifier=verifier[:128],
+    )
+    oidc.cleanup_expired()
+    return JsonResponse({"code": state, "url": url})
 
 
 def oidc_auth_query(request):
-    return JsonResponse({"error": _("未配置 OIDC 登录")})
+    """GET /api/oidc/auth-query -> 未完成时返回客户端识别的固定错误。"""
+    if request.method != "GET":
+        return JsonResponse({"error": _("请求方式错误！")})
+    state = request.GET.get("code", "")
+    rid = request.GET.get("id", "")
+    row = OidcLogin.objects.filter(state=state).first() if state else None
+    if row is None or (row.rid and rid and row.rid != rid):
+        return JsonResponse({"error": oidc.PENDING_ERROR})
+    if row.completed_at is None or not row.access_token:
+        if (timezone.now() - row.created_at).total_seconds() > oidc.LOGIN_TTL_SECONDS:
+            row.delete()
+        return JsonResponse({"error": oidc.PENDING_ERROR})
+    token = RustDeskToken.objects.filter(access_token=row.access_token).first()
+    user = row.user
+    if token is None or user is None or (token.expires_at and token.expires_at <= timezone.now()):
+        row.delete()
+        return JsonResponse({"error": oidc.PENDING_ERROR})
+    body = {
+        "access_token": token.access_token,
+        "type": "access_token",
+        "tfa_type": "",
+        "secret": "",
+        "user": oidc.user_payload(user),
+    }
+    row.delete()
+    return JsonResponse(body)
+
+
+def console_oauth_start(request):
+    """GET /api/oidc/console/auth?op=xxx：控制台登录页的第三方登录入口。
+
+    与客户端流程共用一套 provider/OidcLogin 状态机，区别有两点：
+    回调基址取浏览器当前访问的域名（`api_domain`），登录成功后建立 Session 而非签发令牌。
+    """
+    if request.method != "GET":
+        return oidc.render_page("登录失败", "不支持的请求方式。", 405)
+    limit = getattr(settings, "OIDC_MAX_PER_HOUR", 60)
+    if throttle.too_many("oidc", request, limit, 3600):
+        return oidc.render_page("登录失败", "请求过于频繁，请稍后再试。", 429)
+    throttle.hit("oidc", request, 3600)
+    op = str(request.GET.get("op") or "").strip()[:64]
+    provider = oauth.provider_for(op)
+    if provider is None:
+        return oidc.render_page("登录失败", "登录方式不存在或已停用。", 400)
+    api_domain = request.build_absolute_uri("/")[:255]
+    try:
+        state, verifier, url = oauth.begin_auth(provider, api_domain)
+    except oidc.OidcError as exc:
+        logger.warning("Console OIDC auth start failed: %s", exc)
+        return oidc.render_page("登录失败", str(exc), 400)
+    OidcLogin.objects.create(
+        state=state[:64],
+        flow=OidcLogin.FLOW_CONSOLE,
+        api_domain=api_domain,
+        op=provider.op[:64],
+        code_verifier=verifier[:128],
+    )
+    oidc.cleanup_expired()
+    response = HttpResponseRedirect(url)
+    response.set_cookie(
+        CONSOLE_STATE_COOKIE,
+        state,
+        max_age=oidc.LOGIN_TTL_SECONDS,
+        httponly=True,
+        samesite="Lax",
+        secure=bool(getattr(settings, "HTTPS", False)),
+        path="/",
+    )
+    return response
+
+
+def oidc_callback(request):
+    """IdP 回调：换取 token、建立账号，客户端随后轮询 auth-query。"""
+    if request.method != "GET":
+        return oidc.render_page("登录失败", "不支持的请求方式。", 405)
+    state = request.GET.get("state", "")
+    code = request.GET.get("code", "")
+    row = OidcLogin.objects.filter(state=state).first() if state else None
+    if row is None:
+        return oidc.render_page("登录失败", "登录请求不存在或已过期，请重新发起登录。", 400)
+    if (timezone.now() - row.created_at).total_seconds() > oidc.LOGIN_TTL_SECONDS:
+        row.delete()
+        return oidc.render_page("登录失败", "登录请求已过期，请重新发起登录。", 400)
+    if request.GET.get("error"):
+        reason = request.GET.get("error_description") or request.GET.get("error")
+        row.delete()
+        return oidc.render_page("登录失败", "身份提供方返回了错误：{}".format(reason), 400)
+    if not code:
+        return oidc.render_page("登录失败", "缺少授权码，请重新发起登录。", 400)
+    provider = oauth.provider_for(row.op)
+    if provider is None:
+        row.delete()
+        return oidc.render_page("登录失败", "该登录方式已被删除或停用，请重新发起登录。", 400)
+    is_console = row.flow == OidcLogin.FLOW_CONSOLE
+    if is_console and request.COOKIES.get(CONSOLE_STATE_COOKIE, "") != state:
+        row.delete()
+        return oidc.render_page("登录失败", "登录请求与当前浏览器不匹配，请重新发起登录。", 400)
+    try:
+        if is_console:
+            user = oauth.complete_console_login(provider, row, code)
+            token = None
+        else:
+            user, token = oauth.complete_login(provider, row, code)
+    except oidc.OidcError as exc:
+        # 已知的业务失败（邮箱未验证、账号被禁用、已绑定其他身份等）直接回显，
+        # 让用户知道该找管理员处理什么，而不是笼统的"无法完成登录"。
+        logger.info("OIDC callback rejected: %s", exc)
+        row.delete()
+        return oidc.render_page("登录失败", str(exc), 400)
+    except Exception as exc:  # noqa: BLE001 - 对浏览器只给通用错误，细节写日志
+        logger.warning("OIDC callback failed: %s", exc)
+        row.delete()
+        return oidc.render_page("登录失败", "无法完成登录，请重试或联系管理员。", 400)
+    if is_console:
+        # 控制台流程：建立浏览器会话后回控制台；OidcLogin 行只用于本次握手，用完即删。
+        row.delete()
+        auth_login(request, user, backend="django.contrib.auth.backends.ModelBackend")
+        UserProfile.objects.filter(pk=user.pk).update(last_login=timezone.now())
+        response = HttpResponseRedirect("/console/")
+        response.delete_cookie(CONSOLE_STATE_COOKIE, path="/")
+        return response
+    row.completed_at = timezone.now()
+    row.access_token = token.access_token
+    row.user = user
+    row.save(update_fields=["completed_at", "access_token", "user"])
+    return oidc.render_page("登录成功", "已完成认证，请返回 RustDesk 客户端。")
 
 
 # --------------------------------------------------------------------------
@@ -835,18 +1013,35 @@ def oidc_auth_query(request):
 # --------------------------------------------------------------------------
 
 
+def visible_connection_logs(user, token):
+    logs = ConnLog.objects.all()
+    if user.is_admin:
+        return logs
+    owned = owned_device_ids(user)
+    visible = Q(rid__in=owned) | Q(from_id__in=owned)
+    if can_manage_device(user, token.rid, token):
+        visible |= Q(rid=token.rid) | Q(from_id=token.rid)
+    return logs.filter(visible)
+
+
 def audit_active(request):
     """GET /api/audit/conn/active?id=&session_id=&conn_type= -> JSON 字符串 guid"""
+    if request.method != "GET":
+        return HttpResponse(status=405)
+    token, user = _auth(request)
+    if user is None:
+        return _unauthorized()
     rid = request.GET.get("id", "")
     session_id = request.GET.get("session_id", "")
-    conn = None
+    if not rid:
+        # 契约要求返回 JSON 字符串；缺 id 时给空串，客户端会直接跳过。
+        return JsonResponse("", safe=False)
+    logs = visible_connection_logs(user, token).filter(rid=rid, action="new", conn_end__isnull=True)
     if session_id:
-        conn = ConnLog.objects.filter(rid=rid, session_id=session_id).order_by("-id").first()
-    if conn is None and rid:
-        conn = ConnLog.objects.filter(rid=rid).order_by("-id").first()
-    if conn is None:
-        conn = ConnLog.objects.create(rid=rid, action="new", session_id=session_id, conn_start=datetime.datetime.now())
-    return JsonResponse(str(conn.id), safe=False)
+        logs = logs.filter(session_id=session_id)
+    conn = logs.order_by("-id").first()
+    # 契约要求返回一个 JSON 字符串；没有进行中的连接时返回空串，客户端可直接跳过。
+    return JsonResponse(str(conn.id) if conn else "", safe=False)
 
 
 def health(request):
@@ -857,6 +1052,7 @@ def health(request):
     """
     from django.core.cache import cache
     from django.db import connections
+
     from version import APP_VERSION
 
     db_ok = True
@@ -880,6 +1076,27 @@ def health(request):
         status = "degraded"
     else:
         status = "ok"
+
+    # 版本/数据库/缓存/调试信息只给本机或持有 HEALTH_TOKEN 的监控；公网只暴露状态。
+    token = getattr(settings, "HEALTH_TOKEN", "")
+    import ipaddress
+
+    from api import throttle
+
+    remote = throttle._client_ip(request)
+    private_nets = [
+        ipaddress.ip_network(n)
+        for n in ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "127.0.0.0/8", "::1/128", "fc00::/7")
+    ]
+    try:
+        addr = ipaddress.ip_address(remote)
+        internal = any(addr in net for net in private_nets)
+    except ValueError:
+        internal = False
+    privileged = internal or (bool(token) and request.headers.get("X-Health-Token") == token)
+    if not privileged:
+        return JsonResponse({"status": status}, status=200 if db_ok else 503)
+
     payload = {
         "status": status,
         "version": APP_VERSION,

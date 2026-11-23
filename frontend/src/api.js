@@ -71,6 +71,7 @@ export const api = {
   setup: (body) => request('POST', '/setup', { body }),
   register: (body) => request('POST', '/register', { body }),
   login: (username, password) => request('POST', '/login', { body: { username, password } }),
+  loginOptions: () => request('GET', '/login-options'),
   logout: () => request('POST', '/logout'),
   me: () => request('GET', '/me', { silent401: true }),
   changePassword: (old, password) => request('PUT', '/me/password', { body: { old, password } }),
@@ -120,6 +121,7 @@ export const api = {
   fileLogs: (query) => request('GET', '/logs/file', { query }),
 
   // settings
+  getVersion: () => request('GET', '/version'),
   getSettings: () => request('GET', '/settings'),
   updateSettings: (body) => request('PUT', '/settings', { body }),
 }

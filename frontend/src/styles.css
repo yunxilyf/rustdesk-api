@@ -118,7 +118,7 @@ a {
 }
 
 .login-card {
-  width: 380px;
+  width: min(380px, 100%);
   background: #fff;
   border-radius: 14px;
   padding: 32px 32px 24px;
@@ -161,6 +161,106 @@ a {
 
 .login-link:hover {
   color: #366ef4;
+}
+
+.login-oauth {
+  margin-top: 18px;
+}
+
+.login-or {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--app-muted);
+  font-size: 12px;
+  margin-bottom: 12px;
+}
+
+.login-or::before,
+.login-or::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: #e5e8ef;
+}
+
+.login-oauth-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  width: 100%;
+  box-sizing: border-box;
+  height: 42px;
+  min-width: 0;
+  padding: 0 16px;
+  margin-bottom: 10px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  font-size: 14px;
+  font-weight: 500;
+  text-decoration: none;
+  cursor: pointer;
+  transition: background-color 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.login-oauth-icon {
+  display: inline-flex;
+  flex: 0 0 auto;
+}
+
+.login-oauth-text {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+@media (max-width: 420px) {
+  .login-wrap {
+    padding: 16px;
+  }
+
+  .login-card {
+    padding: 24px 20px 18px;
+  }
+}
+
+.login-oauth-btn.oauth-github {
+  background: #24292f;
+  color: #fff;
+}
+
+.login-oauth-btn.oauth-github:hover {
+  background: #1b1f24;
+  color: #fff;
+}
+
+.login-oauth-btn.oauth-google {
+  background: #fff;
+  color: #1d2129;
+  border-color: #dadce0;
+  box-shadow: 0 1px 2px rgba(60, 64, 67, 0.08);
+}
+
+.login-oauth-btn.oauth-google:hover {
+  background: #f8f9fa;
+  border-color: #c4c7cc;
+  color: #1d2129;
+}
+
+.login-oauth-btn.oauth-oidc {
+  background: #0052d9;
+  color: #fff;
+}
+
+.login-oauth-btn.oauth-oidc:hover {
+  background: #366ef4;
+  color: #fff;
+}
+
+.login-oauth-btn:last-child {
+  margin-bottom: 0;
 }
 
 .tag-color-field { display: flex; flex-direction: column; gap: 6px; width: 100%; }

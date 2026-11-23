@@ -40,7 +40,7 @@
             <t-input v-model="form.old" type="password" placeholder="请输入当前密码" />
           </t-form-item>
           <t-form-item label="新密码">
-            <t-input v-model="form.password" type="password" placeholder="至少 6 位" />
+            <t-input v-model="form.password" type="password" placeholder="至少 8 位" />
           </t-form-item>
           <t-form-item label="确认密码">
             <t-input v-model="form.confirm" type="password" placeholder="再次输入新密码" />
@@ -49,6 +49,116 @@
             <t-button theme="primary" type="submit" :loading="saving">保存</t-button>
           </t-form-item>
         </t-form>
+      </div>
+    </div>
+
+
+    <div class="panel" style="margin-top: 16px; max-width: 980px">
+      <h3 style="margin: 0 0 6px; font-size: 16px">软件更新</h3>
+      <div class="muted" style="margin-bottom: 16px">当前版本 {{ versionInfo.version || '-' }}</div>
+      <div style="display: flex; align-items: center; justify-content: space-between; gap: 24px">
+        <div>
+          <div v-if="versionInfo.update_available" style="font-weight: 500">
+            发现新版本 {{ versionInfo.latest }}
+            <a v-if="versionInfo.release_url" :href="versionInfo.release_url" target="_blank" rel="noopener">查看发布说明</a>
+          </div>
+          <div v-else-if="versionInfo.checked && !versionInfo.error" class="muted">已是最新版本</div>
+          <div v-else-if="versionInfo.error" class="muted">检查失败：{{ versionInfo.error }}</div>
+          <div v-else class="muted">点击右侧按钮检查 GitHub 上是否有新版本</div>
+        </div>
+        <t-button variant="outline" :loading="checking" @click="checkUpdate">检查更新</t-button>
+      </div>
+    </div>
+
+    <div v-if="user?.is_admin" class="panel" style="margin-top: 16px; max-width: 980px">
+      <h3 style="margin: 0 0 6px; font-size: 16px">第三方登录</h3>
+      <div class="muted" style="margin-bottom: 16px">
+        可配置多个登录方式，客户端登录页会并列显示按钮；回调地址需在身份提供方登记为
+        <code>{{ oidc.redirect_uri || CALLBACK_PLACEHOLDER }}</code>
+      </div>
+
+      <div
+        v-for="(p, idx) in oidc.providers"
+        :key="idx"
+        style="border: 1px solid var(--app-border); border-radius: 8px; padding: 12px 12px 0; margin-bottom: 12px"
+      >
+        <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px">
+          <strong>{{ p.name || p.op || '未命名登录方式' }}</strong>
+          <div style="display: flex; align-items: center">
+            <t-switch v-model="p.enabled" size="small" />
+            <span class="muted" style="margin: 0 12px 0 6px">启用</span>
+            <t-button variant="text" theme="danger" size="small" @click="removeProvider(idx)">删除</t-button>
+          </div>
+        </div>
+        <t-form label-width="110px">
+          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0 16px">
+            <t-form-item label="类型">
+              <t-select v-model="p.type" :options="OAUTH_TYPES" style="width: 100%" @change="() => syncOpFromType(p)" />
+            </t-form-item>
+            <t-form-item label="标识 op">
+              <t-input
+                v-model="p.op"
+                :maxlength="32"
+                :disabled="p.saved"
+                :placeholder="p.saved ? '保存后不可修改' : '跟随类型自动填充'"
+                @change="() => (p.op_fixed = !!p.op)"
+              />
+              <div v-if="p.saved" class="muted" style="font-size: 12px">标识参与账号绑定，保存后不可修改</div>
+            </t-form-item>
+            <t-form-item label="按钮名称">
+              <t-input v-model="p.name" :maxlength="64" placeholder="留空则用标识" />
+            </t-form-item>
+            <t-form-item label="排序">
+              <t-input-number v-model="p.sort" theme="normal" style="width: 100%" />
+            </t-form-item>
+          </div>
+          <t-form-item v-if="p.type !== 'github'" label="Issuer">
+            <t-input v-model="p.issuer" placeholder="https://id.example.com/realms/main（Google 可留空）" />
+          </t-form-item>
+          <t-form-item label="Client ID">
+            <t-input v-model="p.client_id" placeholder="rustdesk-api" />
+          </t-form-item>
+          <t-form-item label="Client Secret">
+            <t-input
+              v-model="p.client_secret"
+              type="password"
+              :placeholder="p.has_secret && !p.clear_secret ? '已保存，留空则不修改' : '填写客户端密钥'"
+            />
+          </t-form-item>
+          <t-form-item label="Scopes">
+            <t-input v-model="p.scopes" placeholder="留空使用默认值" />
+          </t-form-item>
+          <t-form-item label=" ">
+            <t-checkbox v-model="p.auto_register">允许自动创建账号</t-checkbox>
+            <t-checkbox v-model="p.pkce_enable" style="margin-left: 16px">启用 PKCE</t-checkbox>
+            <t-button
+              v-if="p.has_secret && !p.clear_secret"
+              variant="text"
+              theme="danger"
+              style="margin-left: 8px"
+              @click="markClearSecret(p)"
+            >
+              清除密钥
+            </t-button>
+            <span v-if="p.clear_secret" class="muted" style="margin-left: 8px">保存后清除已存密钥</span>
+            <t-button v-if="p.clear_secret" variant="text" size="small" @click="undoClearSecret(p)">撤销</t-button>
+          </t-form-item>
+        </t-form>
+      </div>
+
+      <div v-if="oidcLoading" class="muted" style="margin-bottom: 12px">正在加载登录方式…</div>
+      <div v-else-if="!oidc.providers.length" class="muted" style="margin-bottom: 12px">
+        <template v-if="oidcLoaded">尚未配置任何登录方式，客户端登录页不会显示第三方登录按钮。</template>
+        <template v-else>加载失败，请刷新页面后重试（当前不可保存，避免覆盖已有配置）。</template>
+      </div>
+      <t-button variant="outline" @click="addProvider">添加登录方式</t-button>
+      <t-button theme="primary" :loading="savingOidc" :disabled="!oidcLoaded" style="margin-left: 8px" @click="saveOidc">
+        保存全部
+      </t-button>
+      <div class="muted" style="margin-top: 12px">
+        当前状态：<t-tag :theme="oidc.enabled ? 'success' : 'default'" variant="light" size="small">
+          {{ oidc.enabled ? '已启用' : '未启用' }}
+        </t-tag>
       </div>
     </div>
 
@@ -74,7 +184,7 @@
 
 <script setup>
 import { computed, onMounted, reactive, ref } from 'vue'
-import { MessagePlugin } from 'tdesign-vue-next'
+import { DialogPlugin, MessagePlugin } from 'tdesign-vue-next'
 import { api } from '../api'
 import { setUser, store } from '../store'
 
@@ -85,15 +195,144 @@ const profile = reactive({ display_name: '', email: '' })
 const form = reactive({ old: '', password: '', confirm: '' })
 const settings = reactive({ allow_registration: true })
 const savingSetting = ref(false)
+const savingOidc = ref(false)
+const oidc = reactive({ enabled: false, redirect_uri: '', providers: [] })
+const oidcLoaded = ref(false)
+const oidcLoading = ref(false)
+const OAUTH_TYPES = [
+  { value: 'oidc', label: '通用 OIDC' },
+  { value: 'github', label: 'GitHub' },
+  { value: 'google', label: 'Google' },
+]
+const CALLBACK_PLACEHOLDER = 'https://rustdesk.example.com/api/oidc/callback'
+const checking = ref(false)
+const versionInfo = reactive({ version: '', latest: '', update_available: false, release_url: '', error: '', checked: false })
+
+async function checkUpdate() {
+  checking.value = true
+  try {
+    const data = await api.getVersion()
+    Object.assign(versionInfo, {
+      version: data.version || '',
+      latest: data.latest || '',
+      update_available: !!data.update_available,
+      release_url: data.release_url || '',
+      error: data.error || '',
+      checked: true,
+    })
+  } catch (e) {
+    versionInfo.error = e.message || '检查失败'
+    versionInfo.checked = true
+  } finally {
+    checking.value = false
+  }
+}
+
+function newProvider(sort) {
+  return {
+    op: '',
+    op_fixed: false,
+    saved: false,
+    name: '',
+    type: 'oidc',
+    issuer: '',
+    client_id: '',
+    client_secret: '',
+    has_secret: false,
+    clear_secret: false,
+    scopes: '',
+    auto_register: true,
+    pkce_enable: true,
+    enabled: true,
+    sort,
+  }
+}
+
+function normalizeProvider(row, sort) {
+  return {
+    ...newProvider(sort),
+    // 已保存的记录保留原 op，不被类型改名覆盖；op 也不允许再编辑（会丢绑定）。
+    op_fixed: true,
+    saved: true,
+    op: row.op || '',
+    name: row.name || '',
+    type: row.type || 'oidc',
+    issuer: row.issuer || '',
+    client_id: row.client_id || '',
+    scopes: row.scopes || '',
+    auto_register: row.auto_register !== false,
+    pkce_enable: row.pkce_enable !== false,
+    enabled: row.enabled !== false,
+    sort: Number.isFinite(Number(row.sort)) ? Number(row.sort) : sort,
+    has_secret: !!row.has_secret,
+  }
+}
 
 async function loadSettings() {
   if (!user.value?.is_admin) return
+  oidcLoading.value = true
   try {
     const data = await api.getSettings()
     settings.allow_registration = !!data.allow_registration
+    if (data.oidc) {
+      oidc.enabled = !!data.oidc.enabled
+      oidc.redirect_uri = data.oidc.redirect_uri || ''
+      oidc.providers = (data.oidc.providers || []).map((row, idx) => normalizeProvider(row, idx))
+      // 只有真正读到配置才允许保存：否则一次请求失败就会把服务器上的配置删空。
+      oidcLoaded.value = true
+    }
   } catch (e) {
-    /* 忽略：普通用户或未登录 */
+    oidcLoaded.value = false
+  } finally {
+    oidcLoading.value = false
   }
+}
+
+// 标识 op 默认跟随类型；用户手改过（op_fixed）就不再自动覆盖
+function syncOpFromType(provider) {
+  if (provider.type === 'github') provider.issuer = ''
+  if (provider.op_fixed) return
+  provider.op = uniqueOp(provider, provider.type)
+}
+
+function uniqueOp(provider, base) {
+  const taken = new Set(oidc.providers.filter((item) => item !== provider && item.op).map((item) => item.op))
+  if (!taken.has(base)) return base
+  let index = 2
+  while (taken.has(`${base}${index}`)) index += 1
+  return `${base}${index}`
+}
+
+function addProvider() {
+  const provider = newProvider(oidc.providers.length)
+  provider.op = uniqueOp(provider, provider.type)
+  oidc.providers.push(provider)
+}
+
+function removeProvider(index) {
+  const provider = oidc.providers[index]
+  if (!provider) return
+  if (!provider.saved) {
+    oidc.providers.splice(index, 1)
+    return
+  }
+  DialogPlugin.confirm({
+    header: '删除登录方式',
+    body: `删除「${provider.name || provider.op}」后，已绑定的用户将无法再用它登录，确定继续？`,
+    theme: 'warning',
+    onConfirm: () => oidc.providers.splice(index, 1),
+  })
+}
+
+function markClearSecret(provider) {
+  provider.client_secret = ''
+  provider.has_secret = false
+  provider.clear_secret = true
+}
+
+function undoClearSecret(provider) {
+  provider.clear_secret = false
+  provider.has_secret = true
 }
 
 async function saveSetting(value) {
@@ -106,6 +345,83 @@ async function saveSetting(value) {
     await loadSettings()
   } finally {
     savingSetting.value = false
+  }
+}
+
+async function saveOidc() {
+  if (!oidcLoaded.value) {
+    MessagePlugin.warning('登录方式配置尚未加载成功，请刷新页面后重试')
+    return
+  }
+  const seen = new Set()
+  const items = []
+  for (const [idx, p] of oidc.providers.entries()) {
+    const op = (p.op || p.type || '').trim()
+    if (!op) {
+      MessagePlugin.warning(`第 ${idx + 1} 个登录方式缺少标识 op`)
+      return
+    }
+    if (seen.has(op)) {
+      MessagePlugin.warning(`标识 op 重复：${op}`)
+      return
+    }
+    seen.add(op)
+    const clientId = (p.client_id || '').trim()
+    if (!clientId) {
+      MessagePlugin.warning(`${op} 缺少 Client ID`)
+      return
+    }
+    const issuer = (p.issuer || '').trim()
+    if (p.type !== 'github' && !issuer) {
+      MessagePlugin.warning(`${op} 缺少 Issuer`)
+      return
+    }
+    if (issuer && !/^https?:\/\//i.test(issuer)) {
+      MessagePlugin.warning(`${op} 的 Issuer 必须是 http(s) 地址`)
+      return
+    }
+    if (!p.has_secret && !p.client_secret && !p.clear_secret) {
+      MessagePlugin.warning(`${op} 缺少 Client Secret`)
+      return
+    }
+    const item = {
+      op,
+      name: (p.name || '').trim(),
+      type: p.type,
+      issuer,
+      client_id: clientId,
+      scopes: (p.scopes || '').trim(),
+      auto_register: !!p.auto_register,
+      pkce_enable: !!p.pkce_enable,
+      enabled: !!p.enabled,
+      sort: Number(p.sort) || 0,
+    }
+    if (p.client_secret) item.client_secret = p.client_secret
+    if (p.clear_secret) item.clear_secret = true
+    items.push(item)
+  }
+  if (!items.length) {
+    const confirmed = await new Promise((resolve) => {
+      DialogPlugin.confirm({
+        header: '清空第三方登录',
+        body: '当前没有保留任何登录方式，保存后会删除服务器上的全部配置，客户端与控制台将不再显示第三方登录按钮。确定继续？',
+        theme: 'warning',
+        onConfirm: () => resolve(true),
+        onCancel: () => resolve(false),
+        onClose: () => resolve(false),
+      })
+    })
+    if (!confirmed) return
+  }
+  savingOidc.value = true
+  try {
+    await api.updateSettings({ oidc: { providers: items } })
+    MessagePlugin.success('第三方登录配置已保存')
+    await loadSettings()
+  } catch (e) {
+    MessagePlugin.error(e.message || '保存失败')
+  } finally {
+    savingOidc.value = false
   }
 }
 
@@ -138,6 +454,7 @@ async function saveProfile() {
 onMounted(() => {
   syncProfile()
   loadSettings()
+  checkUpdate()
 })
 
 async function submit() {
@@ -145,8 +462,8 @@ async function submit() {
     MessagePlugin.warning('请填写完整')
     return
   }
-  if (form.password.length < 6) {
-    MessagePlugin.warning('新密码至少 6 位')
+  if (form.password.length < 8) {
+    MessagePlugin.warning('新密码至少 8 位')
     return
   }
   if (form.password !== form.confirm) {

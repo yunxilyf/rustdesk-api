@@ -3,7 +3,8 @@
 #   1. 新建目录并进入：mkdir rustdesk-api && cd rustdesk-api
 #   2. 保存本文件为 docker-compose.yml
 #   3. 创建 .env（见 README「Docker 部署」）
-#   4. docker compose up -d
+#   4. 创建数据目录：mkdir -p data/db data/records data/logs
+#   5. docker compose up -d
 services:
   rustdesk-api:
     image: ghcr.io/yunxilyf/rustdesk-api:latest

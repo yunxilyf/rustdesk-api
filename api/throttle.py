@@ -16,10 +16,20 @@ from django.conf import settings
 from django.core.cache import cache
 
 KEY = "login:fail:%s"
+RATE_KEY = "rate:%s"
+
+
+def _client_ip(request):
+    """取客户端 IP；仅在明确处于反向代理后时信任 X-Forwarded-For 的第一段。"""
+    if getattr(settings, "BEHIND_PROXY", False):
+        forwarded = request.META.get("HTTP_X_FORWARDED_FOR", "")
+        if forwarded:
+            return forwarded.split(",")[0].strip()
+    return request.META.get("REMOTE_ADDR", "") or ""
 
 
 def _key(scope, request, username):
-    ip = request.META.get("REMOTE_ADDR", "") or ""
+    ip = _client_ip(request)
     identity = "%s|%s|%s" % (scope, ip, (username or "").strip().lower())
     digest = hashlib.sha1(identity.encode("utf-8")).hexdigest()
     return KEY % digest
@@ -42,3 +52,26 @@ def fail(scope, request, username):
 
 def reset(scope, request, username):
     cache.delete(_key(scope, request, username))
+
+
+def _rate_key(scope, request, extra=""):
+    ip = _client_ip(request)
+    identity = "%s|%s|%s" % (scope, ip, extra)
+    return RATE_KEY % hashlib.sha1(identity.encode("utf-8")).hexdigest()
+
+
+def too_many(scope, request, limit, window, extra=""):
+    """固定窗口限流：达到上限返回 True。"""
+    return (cache.get(_rate_key(scope, request, extra)) or 0) >= limit
+
+
+def hit(scope, request, window, extra=""):
+    """记一次请求；窗口内首次写入时设置过期时间。"""
+    key = _rate_key(scope, request, extra)
+    if cache.add(key, 1, window):
+        return 1
+    try:
+        return cache.incr(key)
+    except ValueError:
+        cache.add(key, 1, window)
+        return 1

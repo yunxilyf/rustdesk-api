@@ -129,11 +129,7 @@ class DeviceGroupPeer(models.Model):
 
 
 class DeviceRecord(models.Model):
-    """设备录像上传记录（协议保留：/api/record）。
-
-    1.5.x 客户端不会主动上传录像，控制台也已移除该入口；
-    保留模型是为了协议与历史数据兼容。
-    """
+    """历史录像记录，供 Django 管理后台访问。"""
 
     rid = models.CharField(_("RustDesk ID"), max_length=64, db_index=True)
     peer_id = models.CharField(_("对端 ID"), max_length=64, blank=True, default="")
@@ -179,3 +175,97 @@ class SystemSetting(models.Model):
 
     def __str__(self):
         return self.key
+
+
+class OidcLogin(models.Model):
+    """一次 OIDC 登录请求的临时状态（客户端轮询取回 token，控制台则建立会话）。"""
+
+    FLOW_CLIENT = "client"
+    FLOW_CONSOLE = "console"
+    FLOW_CHOICES = ((FLOW_CLIENT, _("客户端")), (FLOW_CONSOLE, _("控制台")))
+
+    state = models.CharField(_("状态"), max_length=64, unique=True)
+    flow = models.CharField(_("流程"), max_length=16, blank=True, default=FLOW_CLIENT, choices=FLOW_CHOICES)
+    rid = models.CharField(_("RustDesk ID"), max_length=100, blank=True, default="")
+    uuid = models.CharField(_("设备 UUID"), max_length=100, blank=True, default="")
+    api_domain = models.CharField(_("API 域名"), max_length=255, blank=True, default="")
+    op = models.CharField(_("登录选项"), max_length=64, blank=True, default="")
+    code_verifier = models.CharField(_("PKCE 校验值"), max_length=128, blank=True, default="")
+    created_at = models.DateTimeField(_("创建时间"), auto_now_add=True)
+    completed_at = models.DateTimeField(_("完成时间"), null=True, blank=True)
+    access_token = models.CharField(_("访问令牌"), max_length=64, blank=True, default="")
+    user = models.ForeignKey(
+        "UserProfile",
+        verbose_name=_("用户"),
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="oidc_logins",
+    )
+
+    class Meta:
+        verbose_name = _("OIDC 登录")
+        verbose_name_plural = _("OIDC 登录")
+        ordering = ["-id"]
+
+
+class OauthProvider(models.Model):
+    """第三方登录提供方（可配置多个，客户端按列表渲染按钮）。
+
+    oauth_type 决定认证方式：
+    - github：OAuth2（无 discovery / id_token，用户信息取 api.github.com）
+    - google：标准 OIDC，issuer 固定 https://accounts.google.com
+    - oidc：任意兼容 OIDC 的 IdP（Keycloak / Authentik / Entra ID 等）
+    """
+
+    TYPES = ("github", "google", "oidc")
+
+    op = models.CharField(_("标识"), max_length=32, unique=True)
+    name = models.CharField(_("显示名称"), max_length=64, blank=True, default="")
+    oauth_type = models.CharField(_("类型"), max_length=16, default="oidc")
+    client_id = models.CharField(_("客户端 ID"), max_length=255, blank=True, default="")
+    client_secret = models.CharField(_("客户端密钥"), max_length=255, blank=True, default="")
+    issuer = models.CharField(_("Issuer"), max_length=255, blank=True, default="")
+    scopes = models.CharField(_("Scope"), max_length=255, blank=True, default="")
+    auto_register = models.BooleanField(_("自动注册"), default=True)
+    pkce_enable = models.BooleanField(_("启用 PKCE"), default=True)
+    sort = models.IntegerField(_("排序"), default=0)
+    enabled = models.BooleanField(_("启用"), default=True)
+    updated_at = models.DateTimeField(_("更新时间"), auto_now=True)
+
+    class Meta:
+        verbose_name = _("第三方登录")
+        verbose_name_plural = _("第三方登录")
+        ordering = ["sort", "id"]
+
+    def __str__(self):
+        return self.op
+
+    def label(self):
+        return (self.name or self.op).strip()
+
+
+class UserOauth(models.Model):
+    """第三方身份与本地账号的绑定关系（一个账号可绑定多个 provider）。"""
+
+    user = models.ForeignKey(
+        "UserProfile",
+        verbose_name=_("用户"),
+        on_delete=models.CASCADE,
+        related_name="oauth_links",
+    )
+    op = models.CharField(_("登录方式"), max_length=32)
+    openid = models.CharField(_("第三方主体"), max_length=191)
+    created_at = models.DateTimeField(_("创建时间"), auto_now_add=True)
+
+    class Meta:
+        verbose_name = _("第三方账号绑定")
+        verbose_name_plural = _("第三方账号绑定")
+        ordering = ["id"]
+        constraints = [
+            models.UniqueConstraint(fields=["op", "openid"], name="uniq_user_oauth_op_openid"),
+        ]
+        indexes = [models.Index(fields=["user", "op"], name="idx_user_oauth_user_op")]
+
+    def __str__(self):
+        return "{}:{}".format(self.op, self.openid)
