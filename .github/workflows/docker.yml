@@ -12,10 +12,12 @@ concurrency:
 
 env:
   DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+  HAS_DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN != '' }}
 
 jobs:
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     permissions:
       contents: read
       packages: write
@@ -25,9 +27,62 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: 校验发布标签与 version.py 一致
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          APP_VER="$(python3 -c 'import version; print(version.APP_VERSION)')"
+          if [ "$APP_VER" != "${GITHUB_REF_NAME}" ]; then
+            echo "::error::发布标签 ${GITHUB_REF_NAME} 与 version.py (${APP_VER}) 不一致，请先更新 version.py。"
+            exit 1
+          fi
+          echo "Verified version.py == ${APP_VER}"
+
       - uses: docker/setup-qemu-action@v3
 
       - uses: docker/setup-buildx-action@v3
+
+      - name: 推送前容器冒烟构建（linux/amd64）
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile
+          platforms: linux/amd64
+          load: true
+          tags: rustdesk-api:ci-smoke
+          cache-from: type=gha
+
+      - name: 推送前容器运行时冒烟
+        run: |
+          set -euo pipefail
+          SECRET="$(python3 -c 'import secrets; print(secrets.token_urlsafe(50))')"
+          docker run -d --name rd-ci-smoke \
+            -p 127.0.0.1:21299:21114 \
+            -e "SECRET_KEY=${SECRET}" \
+            -e "ALLOWED_HOSTS=127.0.0.1,localhost" \
+            -e "RUSTDESK_KEY=CI_SMOKE_KEY_DO_NOT_LEAK" \
+            rustdesk-api:ci-smoke
+          for i in $(seq 1 40); do
+            if curl -sf http://127.0.0.1:21299/api/health > /dev/null; then break; fi
+            sleep 1
+          done
+          curl -sf http://127.0.0.1:21299/api/health
+          echo
+          curl -sf -o /dev/null http://127.0.0.1:21299/console/
+          test "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:21299/web/)" = "302"
+          test "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:21299/web/rd-config.js)" = "401"
+          test "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:21299/api/webclient/auth)" = "401"
+          test "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:21299/ws/id)" = "401"
+          BAD_PERMS="$(docker exec rd-ci-smoke find /app/webroot/web -perm /002)"
+          if [ -n "$BAD_PERMS" ]; then
+            echo "::error::Found world-writable files in /app/webroot/web: $BAD_PERMS"
+            exit 1
+          fi
+
+      - name: 清理冒烟容器
+        if: always()
+        run: |
+          docker logs --tail 60 rd-ci-smoke || true
+          docker rm -f rd-ci-smoke || true
 
       - name: 登录 GHCR
         uses: docker/login-action@v3
@@ -37,7 +92,7 @@ jobs:
           password: ${{ secrets.GHCR_TOKEN || secrets.GITHUB_TOKEN }}
 
       - name: 登录 Docker Hub
-        if: ${{ env.DOCKERHUB_USERNAME != '' }}
+        if: env.DOCKERHUB_USERNAME != '' && env.HAS_DOCKERHUB_TOKEN == 'true'
         uses: docker/login-action@v3
         with:
           username: ${{ env.DOCKERHUB_USERNAME }}
@@ -56,7 +111,7 @@ jobs:
 
       - name: 生成 Docker Hub 镜像标签
         id: meta_dh
-        if: ${{ env.DOCKERHUB_USERNAME != '' }}
+        if: env.DOCKERHUB_USERNAME != '' && env.HAS_DOCKERHUB_TOKEN == 'true'
         uses: docker/metadata-action@v5
         with:
           images: ${{ env.DOCKERHUB_USERNAME }}/rustdesk-api
@@ -66,7 +121,7 @@ jobs:
             type=semver,pattern={{major}}.{{minor}}
             type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v') }}
 
-      - name: 构建并推送
+      - name: 构建并推送（GHCR + Docker Hub）
         uses: docker/build-push-action@v6
         with:
           context: .

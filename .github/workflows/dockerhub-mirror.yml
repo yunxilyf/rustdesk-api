@@ -1,23 +1,67 @@
 name: Mirror to Docker Hub
 
+# 说明：
+# - 常规构建由 Docker 工作流（docker.yml）一次多架构同时推送 GHCR 和 Docker Hub，
+#   本工作流仅保留手动触发（workflow_dispatch），用于 Docker Hub 偶发超时后的补同步，
+#   或手工把指定 GHCR 标签同步到 Docker Hub，避免每次构建重复覆盖推送。
 on:
   workflow_dispatch:
     inputs:
       tags:
-        description: '要同步的标签，逗号分隔'
-        required: true
-        default: 'latest'
-  release:
-    types: [published]
+        description: '要同步的标签，逗号分隔（如 1.2.0,1.2,latest）；留空则按当前分支/tag 自动推断'
+        required: false
+        default: ''
+
+concurrency:
+  group: dockerhub-mirror-${{ github.ref_name }}
+  cancel-in-progress: true
 
 jobs:
   mirror:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     permissions:
       contents: read
       packages: read
 
+    env:
+      SRC: ghcr.io/${{ github.repository }}
+      DST: ${{ secrets.DOCKERHUB_USERNAME }}/rustdesk-api
+      HAS_DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN != '' }}
+      INPUT_TAGS: ${{ inputs.tags }}
+      SOURCE_REF: ${{ github.ref_name }}
+
     steps:
+      - name: 检查 Docker Hub 凭据
+        if: env.DST == '/rustdesk-api' || env.HAS_DOCKERHUB_TOKEN != 'true'
+        run: |
+          echo "::error::缺少 DOCKERHUB_USERNAME / DOCKERHUB_TOKEN secrets，无法同步 Docker Hub。"
+          exit 1
+
+      - name: 计算标签
+        id: tags
+        run: |
+          set -euo pipefail
+          tag_list="$INPUT_TAGS"
+          if [[ -z "$tag_list" ]]; then
+            if [[ "$SOURCE_REF" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+              version="${SOURCE_REF#v}"
+              minor="${version%.*}"
+              tag_list="$version,$minor,latest"
+            else
+              tag_list="latest"
+            fi
+          fi
+          if [[ "$tag_list" == *$'\n'* || "$tag_list" == *$'\r'* || ! "$tag_list" =~ ^[A-Za-z0-9_.,\ -]+$ ]]; then
+            echo "::error::tags 参数包含非法字符或换行。"
+            exit 1
+          fi
+          echo "tags=$tag_list" >> "$GITHUB_OUTPUT"
+          echo "将同步: $tag_list"
+
+      - name: 设置 buildx
+        uses: docker/setup-buildx-action@v3
+
       - name: 登录 GHCR
         uses: docker/login-action@v3
         with:
@@ -33,30 +77,56 @@ jobs:
 
       - name: 从 GHCR 复制到 Docker Hub
         env:
-          SRC: ghcr.io/${{ github.repository }}
-          DST: ${{ secrets.DOCKERHUB_USERNAME }}/rustdesk-api
-          REQUESTED_TAGS: ${{ inputs.tags }}
-          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          TAGS: ${{ steps.tags.outputs.tags }}
         run: |
           set -euo pipefail
-          tag_list="$REQUESTED_TAGS"
-          if [[ "$GITHUB_EVENT_NAME" == release ]]; then
-            tag_list="${RELEASE_TAG#v}"
-          fi
-          if [[ -z "$tag_list" || "$tag_list" == *$'\n'* || "$tag_list" == *, ]]; then
-            echo "Expected a comma-separated list of Docker tags." >&2
-            exit 1
-          fi
-          IFS=',' read -r -a tags <<< "$tag_list"
-          for i in "${!tags[@]}"; do
-            tag="$(printf '%s' "${tags[i]}" | sed -E 's/^[[:blank:]]+|[[:blank:]]+$//g')"
+
+          IFS=',' read -r -a raw_tags <<< "$TAGS"
+          tags=()
+          for i in "${!raw_tags[@]}"; do
+            tag="$(printf '%s' "${raw_tags[i]}" | sed -E 's/^[[:blank:]]+|[[:blank:]]+$//g')"
+            if [[ -z "$tag" ]]; then
+              continue
+            fi
             if [[ ! "$tag" =~ ^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$ ]]; then
-              echo "Invalid Docker tag at position $((i + 1))." >&2
+              echo "::error::第 $((i + 1)) 个标签不合法：$tag"
               exit 1
             fi
-            tags[i]="$tag"
+            tags+=("$tag")
           done
+
+          if [[ ${#tags[@]} -eq 0 ]]; then
+            echo "::error::没有可同步的标签。"
+            exit 1
+          fi
+
+          mirrored=0
+          missing=0
           for tag in "${tags[@]}"; do
-            echo "==> $SRC:$tag -> $DST:$tag"
-            docker buildx imagetools create --tag "$DST:$tag" "$SRC:$tag"
+            echo "==> 等待 $SRC:$tag"
+            exists=0
+            for attempt in $(seq 1 20); do
+              if docker buildx imagetools inspect "$SRC:$tag" >/dev/null 2>&1; then
+                exists=1
+                break
+              fi
+              echo "    未就绪（$attempt/20），15s 后重试..."
+              sleep 15
+            done
+
+            if [[ "$exists" -ne 1 ]]; then
+              echo "::warning::未找到源标签 $SRC:$tag，已跳过。"
+              missing=$((missing + 1))
+              continue
+            fi
+
+            echo "==> 复制 $SRC:$tag -> $DST:$tag"
+            docker buildx imagetools create -t "$DST:$tag" "$SRC:$tag"
+            mirrored=$((mirrored + 1))
           done
+
+          echo "同步完成：成功 $mirrored，跳过 $missing"
+          if [[ "$mirrored" -eq 0 ]]; then
+            echo "::error::没有任何标签被同步，请检查 GHCR 源仓库。"
+            exit 1
+          fi

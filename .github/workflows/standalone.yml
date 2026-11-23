@@ -5,6 +5,10 @@ on:
     tags: ["v*"]
   workflow_dispatch:
 
+concurrency:
+  group: standalone-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 
@@ -12,26 +16,38 @@ jobs:
   build:
     name: build-${{ matrix.artifact }}
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 35
     strategy:
       fail-fast: false
       matrix:
         include:
           - os: ubuntu-22.04
             artifact: linux-x86_64
-            archive: rustdesk-api-server-linux-x86_64.tar.gz
           - os: windows-2022
             artifact: windows-x64
-            archive: rustdesk-api-server-windows-x64.zip
     steps:
       - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
 
       - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
 
+      - name: Verify version.py matches release tag
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        run: |
+          APP_VER="$(python -c 'import version; print(version.APP_VERSION)')"
+          if [ "$APP_VER" != "${GITHUB_REF_NAME}" ]; then
+            echo "::error::Release tag ${GITHUB_REF_NAME} does not match version.py (${APP_VER})"
+            exit 1
+          fi
+          echo "Verified version.py == ${APP_VER}"
+
       - uses: actions/setup-node@v5
         with:
-          node-version: "20"
+          node-version: "22"
           cache: npm
           cache-dependency-path: frontend/package-lock.json
 
@@ -53,7 +69,7 @@ jobs:
           export SECRET_KEY="$(python -c "import secrets; print(secrets.token_urlsafe(50))")"
           python manage.py collectstatic --noinput
 
-      - name: Build single-file executable
+      - name: Build standalone bundle
         shell: bash
         run: pyinstaller --noconfirm --clean deploy/rustdesk-api.spec
 
@@ -78,23 +94,51 @@ jobs:
       - name: Smoke test executable
         shell: bash
         run: |
+          set -euo pipefail
           mkdir -p smoke && cd smoke
           if [ "${{ runner.os }}" = "Windows" ]; then
-            ../dist/rustdesk-api-server/rustdesk-api-server.exe &
+            OPEN_BROWSER=0 ../dist/rustdesk-api-server/rustdesk-api-server.exe &
           else
-            ../dist/rustdesk-api-server/rustdesk-api-server &
+            OPEN_BROWSER=0 ../dist/rustdesk-api-server/rustdesk-api-server &
           fi
           pid=$!
+          cleanup() {
+            kill "$pid" 2>/dev/null || taskkill //F //IM rustdesk-api-server.exe 2>/dev/null || true
+          }
+          trap cleanup EXIT
           for i in $(seq 1 40); do
             if curl -fsS "http://127.0.0.1:21114/api/health" > health.json 2>/dev/null; then
               cat health.json
+              echo
               break
             fi
             sleep 2
           done
           curl -fsS "http://127.0.0.1:21114/api/health"
+          echo
           curl -fsS -o /dev/null "http://127.0.0.1:21114/console/"
-          kill $pid 2>/dev/null || taskkill //F //IM rustdesk-api-server.exe || true
+          test -f ../dist/rustdesk-api-server/data/webroot/web/index.html
+          if [ "${{ runner.os }}" != "Windows" ]; then
+            BAD_PERMS="$(find ../dist/rustdesk-api-server/data/webroot/web -perm /002)"
+            if [ -n "$BAD_PERMS" ]; then
+              echo "::error::World-writable files in unpacked webroot: $BAD_PERMS"
+              exit 1
+            fi
+          fi
+          web_code="$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:21114/web/)"
+          web_loc="$(curl -s -o /dev/null -w '%{redirect_url}' http://127.0.0.1:21114/web/)"
+          test "$web_code" = "302"
+          case "$web_loc" in
+            */console/?next=/web/) ;;
+            *) echo "Unexpected /web/ redirect: $web_loc"; exit 1 ;;
+          esac
+          test "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:21114/web/rd-config.js)" = "401"
+          test "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:21114/api/webclient/auth)" = "401"
+
+      - name: Dump logs on failure
+        if: failure()
+        shell: bash
+        run: tail -100 dist/rustdesk-api-server/data/logs/app.log || true
 
       - uses: actions/upload-artifact@v4
         with:
@@ -108,6 +152,7 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/')
     needs: build
     runs-on: ubuntu-22.04
+    timeout-minutes: 10
     permissions:
       contents: write
     steps:

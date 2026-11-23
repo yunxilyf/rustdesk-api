@@ -4,12 +4,17 @@ on:
   push:
   pull_request:
 
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 
 jobs:
   backend:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     env:
       DEBUG: '0'
       SECRET_KEY: ci-Q7vN2pL8xR4tB9mC5kW1sD6fH3jG0aZ-eU7iO2uY9tR4eW8qP3aS5dF1gH
@@ -25,15 +30,49 @@ jobs:
 
       - name: 安装依赖
         run: |
-          pip install "django==6.1.3" ruff
+          pip install -r requirements.txt ruff
 
       - name: 代码风格检查
         run: |
           ruff check .
           ruff format --check .
 
-      - name: Django 自检
-        run: python manage.py check
+      - name: 部署脚本与网页包完整性检查
+        run: |
+          python - <<'PY'
+          import os, tarfile
+          from pathlib import Path
+
+          for rel in (
+              "Dockerfile",
+              "deploy/entrypoint.sh",
+              "deploy/install-web.sh",
+              "deploy/nginx.conf.template",
+              "deploy/nginx-webclient.conf.example",
+          ):
+              data = Path(rel).read_bytes()
+              assert b"\r\n" not in data, f"CRLF found in {rel}"
+
+          bundles = sorted(Path("deploy/web").glob("rustdesk-web-*.tar.gz"))
+          assert bundles, "Missing deploy/web/rustdesk-web-*.tar.gz"
+          bundle = bundles[-1]
+          names = set()
+          with tarfile.open(bundle, "r:gz") as tf:
+              for m in tf.getmembers():
+                  assert not (m.issym() or m.islnk()), f"Link not allowed: {m.name}"
+                  norm = os.path.normpath(m.name).replace("\\", "/")
+                  assert not norm.startswith("/") and norm != ".." and not norm.startswith("../"), f"Bad path: {m.name}"
+                  assert (m.mode & 0o002) == 0, f"World-writable entry: {m.name} ({oct(m.mode)})"
+                  names.add(norm)
+          assert "index.html" in names, "Missing index.html in web bundle"
+          assert "js/rustdesk-web-core.js" in names, "Missing js/rustdesk-web-core.js in web bundle"
+          print(f"Verified {bundle} ({len(names)} entries, clean permissions)")
+          PY
+
+      - name: Django 自检与迁移一致性
+        run: |
+          python manage.py check
+          python manage.py makemigrations --check --dry-run
 
       - name: 单元测试（仅当仓库带有 api/tests 时）
         run: |
@@ -54,14 +93,31 @@ jobs:
       - name: 部署自检（doctor）
         run: python manage.py doctor
 
-      - name: 健康检查冒烟
+      - name: 健康检查与网页远控鉴权冒烟
         run: |
+          set -euo pipefail
+          mkdir -p /tmp/ci-web
+          tar --no-same-owner --no-same-permissions -xzf deploy/web/rustdesk-web-*.tar.gz -C /tmp/ci-web
+          export WEBCLIENT_ROOT=/tmp/ci-web
           python manage.py runserver 127.0.0.1:21114 --noreload > server.log 2>&1 &
+          pid=$!
+          trap 'kill "$pid" 2>/dev/null || true' EXIT
           for i in $(seq 1 40); do
             if curl -sf http://127.0.0.1:21114/api/health > /dev/null; then break; fi
             sleep 1
           done
           curl -sf http://127.0.0.1:21114/api/health
+          echo
+          test "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:21114/api/webclient/auth)" = "401"
+          test "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:21114/api/webclient/config.js)" = "401"
+          test "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:21114/web/rd-config.js)" = "401"
+          web_code="$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:21114/web/)"
+          web_loc="$(curl -s -o /dev/null -w '%{redirect_url}' http://127.0.0.1:21114/web/)"
+          test "$web_code" = "302"
+          case "$web_loc" in
+            */console/?next=/web/) ;;
+            *) echo "Unexpected /web/ redirect: $web_loc"; exit 1 ;;
+          esac
 
       - name: 失败时打印服务日志
         if: failure()
@@ -69,6 +125,7 @@ jobs:
 
   console-build:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v5
         with:
