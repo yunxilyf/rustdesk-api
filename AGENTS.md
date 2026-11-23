@@ -31,6 +31,7 @@
 │   ├── views_pro.py            # 新版地址簿、分组、设备部署、CLI 等
 │   ├── console_api.py          # 控制台 JSON API（Session 登录 + CSRF）
 │   ├── views_front.py          # 首页跳转、注册/登出、旧版 action 兼容
+│   ├── webclient.py            # 网页远控 Session 鉴权、共享令牌绑定、免安装版 /web/ 静态托管
 │   ├── client_auth.py          # 客户端 Bearer 认证与令牌续期
 │   ├── throttle.py             # 登录/注册限流（缓存实现，可切 Redis）
 │   ├── settings_store.py       # 运行时系统设置（DB + 缓存）
@@ -43,10 +44,10 @@
 ├── rustdesk_server_api/        # Django 工程
 │   ├── settings.py             # 环境变量集中解析
 │   ├── env.py                  # env_bool/env_int/env_list/SECRET_KEY 校验
-│   ├── urls.py                 # 根路由（/api/、/console/、/admin/、/static/）
+│   ├── urls.py                 # 根路由（/api/、/console/、/web/、/web-login、/admin/、/static/）
 │   └── wsgi.py
 ├── frontend/                   # Vue 3 控制台源码（构建到 static/console）
-├── deploy/                     # compose、systemd、nginx、entrypoint、standalone 打包
+├── deploy/                     # compose、systemd、nginx 模板、entrypoint、install-web、standalone、web 预构建包
 ├── docs/                       # 契约与部署文档（对外）
 ├── images/                     # README 用截图（仅保留被引用的）
 ├── static/                     # 运行期静态文件（admin/ 与 console/ 均为生成物）
@@ -139,7 +140,7 @@
 
 - 禁止在仓库根创建 `pip-*`、`*.log`、`*.sqlite3`、`build/`、`dist/`、截图、压缩包；这些一律被忽略，也不应长期保留。
 - 调试脚本放 `_dev/`；运维/服务器脚本放 `_ops/`；迁移快照放 `_migrate/`；测试脚本放 `tests/local/`。
-- 打包产物放 `dist/` 并在验证后删除；镜像由 CI 构建，不在仓库存二进制。
+- 打包产物放 `dist/` 并在验证后删除；镜像由 CI 构建，不在仓库存应用二进制（`deploy/web/rustdesk-web-*.tar.gz` 第三方预构建静态包除外）。
 - 发现根目录垃圾文件时，先确认无进程占用，再删除并补 `.gitignore`。
 
 ---

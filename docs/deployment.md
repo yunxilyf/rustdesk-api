@@ -7,7 +7,7 @@
 
 | 组件 | 说明 |
 |---|---|
-| Django 应用 | API（`/api/*`）、TDesign 控制台（`/console/`）、Django Admin（`/admin/`） |
+| Django 应用 | API（`/api/*`）、TDesign 控制台（`/console/`）、网页远控（`/web/`）、Django Admin（`/admin/`） |
 | 数据库 | 默认 SQLite（自动 WAL）；生产推荐 Postgres，其次 MySQL |
 | 缓存 | 默认进程内；多进程可用数据库缓存或 Redis |
 | 历史录像目录 | 默认 `records/`，可用 `RECORD_ROOT` 指定 |
@@ -68,7 +68,15 @@ python -c "import secrets;print('SECRET_KEY='+secrets.token_urlsafe(50))"
 | `ALLOWED_HOSTS` | `rd.example.com,127.0.0.1` | 允许的域名与本机健康探测地址 |
 | `CSRF_TRUSTED_ORIGINS` | `https://rd.example.com` | 控制台/后台的来源 |
 | `HTTPS` | `1` | 开启 Secure Cookie、HSTS、SSL 跳转 |
-| `BEHIND_PROXY` | `1` | 信任 nginx 的 `X-Forwarded-Proto` 与 `X-Forwarded-For`（限流按真实客户端 IP 计数） |
+| `BEHIND_PROXY` | `1` | 信任外层 nginx 的 `X-Forwarded-Proto` 与 `X-Forwarded-For`（限流与健康检查按可信代理跳数取真实客户端 IP） |
+| `TRUSTED_PROXY_COUNT` | 留空 | 可选：多层代理（如 CDN + nginx）时显式指定可信代理跳数；留空自动推导 |
+| `ID_SERVER` | 留空或域名 | 网页远控信令服务器；Docker 内置 nginx 下留空自动按请求地址推导（纯 IP/非默认端口走同源 `ws(s)://<host>/ws/id`） |
+| `RELAY_SERVER` | 留空 | 网页远控中继服务器；通常留空由 hbbs 下发 |
+| `API_SERVER` | 留空 | 网页远控调用的 API 地址；留空默认当前访问地址 |
+| `RUSTDESK_KEY` | hbbs 公钥 | `id_ed25519.pub` 内容，网页远控连接必填 |
+| `WEBCLIENT_ROOT` | `/app/webroot/web` | 免安装包 / 直连模式由 Django 提供 `/web/` 时的静态目录；Docker 内置 nginx 使用 `WEBROOT` |
+| `WEBCLIENT_AUTO_INSTALL` | `1` | 容器启动时自动解压内置网页远控包到 `WEBROOT`；升级用 `WEBCLIENT_FORCE_UPDATE=1` |
+| `HBBS_WS` / `HBBR_WS` | `host.docker.internal:21118/21119` | 容器内置 nginx 代理 `/ws/id` 与 `/ws/relay` 的上游地址 |
 | `CACHE_URL` | `redis://127.0.0.1:6379/0` | 多进程时限流需要（有 Redis 时） |
 | `CACHE_BACKEND` | `db` | 没有 Redis 时的共享缓存；Docker 入口脚本会自动建 `rustdesk_cache` 表，裸机部署请手动执行 `python manage.py createcachetable`（免安装包已内置） |
 | `HEALTH_TOKEN` | 随机串 | 远端监控读取健康检查详情时带的 `X-Health-Token` |
@@ -144,9 +152,11 @@ WantedBy=multi-user.target
 
 ### Docker
 
-容器方式见根目录 README。Compose 模板监听本机端口，外部访问由 HTTPS 反向代理转发。容器部署时，Nginx 可将 `/static/` 一并转发给 Django。
+容器方式见根目录 README。镜像内置 nginx，`21114` 一个端口同时提供 API、控制台、静态文件和网页远控；外部访问仍建议由宿主机 HTTPS 反向代理转发。
 
 镜像默认以 root 运行，bind mount 的 `data/` 目录无需额外 `chown`。如果你自行在编排里改为非 root 用户，需要先把 `data/` 交给对应的 uid，否则迁移会因无写权限失败。
+
+用本仓库 `Dockerfile` 构建的镜像已内置 nginx 和网页远控预构建包（`deploy/web/rustdesk-web-1.5.3.tar.gz`）：`entrypoint.sh` 首次启动解压到 `/app/webroot`，容器内 nginx 直接用 `21114` 提供 `/console/`、`/web/`、`/api/` 与 `/ws/*`，并通过 `auth_request /_web_auth` 校验控制台会话（共享登录、双向退出与实时断连）。宿主机只需要把 `21114` 反代到 443，不必再单独配置 `/web/` 静态站点。`HBBS_WS`/`HBBR_WS` 指向 hbbs/hbbr（compose 默认 `host.docker.internal:21118/21119`）。升级网页包时设 `WEBCLIENT_FORCE_UPDATE=1` 重启一次；详细配置见 [webclient.md](webclient.md)。
 
 设备重装或系统重装后 UUID 会变化。所有已登记设备更换 UUID 都需要管理员确认，普通后台上报不会直接改写身份：
 
@@ -175,11 +185,25 @@ server {
         expires 7d;
     }
 
+    location ^~ /ws/ {
+        proxy_pass         http://127.0.0.1:21114;
+        proxy_http_version 1.1;
+        proxy_set_header   Upgrade           $http_upgrade;
+        proxy_set_header   Connection        "upgrade";
+        proxy_set_header   Host              $http_host;
+        proxy_set_header   X-Real-IP         $remote_addr;
+        proxy_set_header   X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header   X-Forwarded-Proto $scheme;
+        proxy_read_timeout 3600s;
+        proxy_send_timeout 3600s;
+        proxy_buffering    off;
+    }
+
     location / {
         proxy_pass         http://127.0.0.1:21114;
-        proxy_set_header   Host              $host;
+        proxy_set_header   Host              $http_host;
         proxy_set_header   X-Real-IP         $remote_addr;
-        proxy_set_header   X-Forwarded-For   $proxy_add_x_forwarded_for;  # BEHIND_PROXY=1 时限流按首段 IP 计数
+        proxy_set_header   X-Forwarded-For   $proxy_add_x_forwarded_for;  # BEHIND_PROXY=1 时按可信代理跳数从右侧取真实客户端 IP
         proxy_set_header   X-Forwarded-Proto $scheme;
         proxy_read_timeout 120s;
     }
@@ -194,7 +218,7 @@ server {
 ```bash
 # 公网只返回 {"status":"ok"}；本机或带 HEALTH_TOKEN 才返回版本/数据库/缓存详情
 curl -fsS https://rd.example.com/api/health
-# {"status":"ok","version":"v1.1.0","database":"ok","cache":"ok",
+# {"status":"ok","version":"v1.2.0","database":"ok","cache":"ok",
 #  "cache_backend":"redis","debug":false}
 ```
 

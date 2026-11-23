@@ -1,6 +1,6 @@
 # RustDesk API Server
 
-[English](README_EN.md) · [部署指南](docs/deployment.md) · [客户端 API](docs/client_api_contract.md) · [控制台 API](docs/console_api.md) · [OIDC 登录](docs/oidc.md)
+[English](README_EN.md) · [部署指南](docs/deployment.md) · [网页远控](docs/webclient.md) · [客户端 API](docs/client_api_contract.md) · [控制台 API](docs/console_api.md) · [OIDC 登录](docs/oidc.md)
 
 为自建 RustDesk 提供账号、地址簿、设备与审计服务。API 由 Django 提供，管理控制台使用 Vue 3 和 TDesign。侧栏显示当前版本，设置页可一键检查 GitHub 上的新版本。
 
@@ -18,6 +18,7 @@
 | ![地址簿](images/console_addressbook.png) | ![用户](images/console_users.png) |
 
 - **客户端**支持登录、个人与共享地址簿、设备上报、连接及文件审计，并兼容旧版单地址簿。
+- **网页远控（内置）**：与控制台共用登录态，无需二次登录；支持个人地址簿已存连接密码免密连接、设备在线状态实时查询，以及控制台与网页端双向退出登录与活跃连接即时断开。配置见 [docs/webclient.md](docs/webclient.md)。
 - **管理员**可以管理账号、分配设备归属、设置共享地址簿、分组和注册权限。
 - **第三方登录（可选，可并存多个）**：标准 OIDC（Keycloak、Authentik、Entra 等）、Google、GitHub，客户端与控制台登录页都会并列显示按钮；关闭「允许注册」后第三方授权只能登录已有账号。配置见 [docs/oidc.md](docs/oidc.md)。
 - **存储**默认使用 SQLite。也支持 PostgreSQL 和 MySQL，多个工作进程可用 Redis 共享登录限流状态。
@@ -60,7 +61,7 @@ python manage.py runserver 127.0.0.1:21114
 - `rustdesk-api-server-<版本>-linux-x86_64.tar.gz`：解压后 `./rustdesk-api-server`
 - `rustdesk-api-server-<版本>-windows-x64.zip`：解压后双击 `rustdesk-api-server.exe`
 
-首次启动会在可执行文件旁创建 `data/` 并自动生成密钥，默认监听 `21114`；详见[独立运行说明](deploy/README-STANDALONE.md)。打 tag（`v*`）时 GitHub Actions 会自动构建并附到 Release。
+首次启动会在可执行文件旁创建 `data/`、自动解压内置网页远控并生成密钥，默认监听 `21114`；详见[独立运行说明](deploy/README-STANDALONE.md)。打 tag（`v*`）时 GitHub Actions 会自动构建并附到 Release。
 
 ## 容器部署
 
@@ -74,10 +75,12 @@ GitHub Actions 构建 Linux amd64 和 arm64 镜像。预构建镜像已包含控
 下载 [Compose 模板](deploy/docker-compose.quickstart.yml) 和 [.env 示例](.env.example)，分别保存为 `docker-compose.yml` 和 `.env`。填好随机 `SECRET_KEY` 后执行以下命令。
 
 ```bash
-mkdir -p data/db data/records data/logs
+mkdir -p data/db data/records data/logs webroot
 docker compose up -d
 docker compose exec rustdesk-api python manage.py ensure_admin
 curl -fsS http://127.0.0.1:21114/api/health
+# 控制台：http://127.0.0.1:21114/console/
+# 网页远控：登录控制台后点侧栏「网页远控」（镜像已内置，无需另配 nginx）
 ```
 
 快速开始模板把 21114 发布到所有网卡（`0.0.0.0`），便于内网试用；请用防火墙限制来源，或按部署指南前置 HTTPS 反向代理后再开放公网。生产模板 `deploy/docker-compose.prod.yaml` 默认只绑定 `127.0.0.1`。配置反向代理时设置 `ALLOWED_HOSTS`、`CSRF_TRUSTED_ORIGINS`、`HTTPS=1` 和 `BEHIND_PROXY=1`，并把客户端的 API 服务器指向该 HTTPS 地址。
@@ -113,4 +116,4 @@ npm --prefix frontend run build
 
 ## 致谢与许可
 
-感谢 [RustDesk](https://github.com/rustdesk/rustdesk) 及社区。本项目依据 RustDesk 1.5.x 客户端行为独立实现 API 和控制台，采用 [MIT License](LICENSE)。
+感谢 [RustDesk](https://github.com/rustdesk/rustdesk) 及社区。本项目依据 RustDesk 1.5.x 客户端行为独立实现 API 和控制台，采用 [MIT License](LICENSE)。网页远控使用独立的预构建组件（基于 temandroid/rustdesk-web，**AGPL-3.0**），编译好的站点包放在 `deploy/web/`（源码不进入本仓库），用本仓库 `Dockerfile` 构建的镜像会内置该包并在首次启动时自动解压；部署与配置见 [docs/webclient.md](docs/webclient.md)。

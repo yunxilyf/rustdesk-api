@@ -29,6 +29,7 @@ rustdesk-api-server.exe
   RustDesk API Server 已启动
   控制台（本机）：  http://127.0.0.1:21114/console/
   控制台（局域网）：http://192.168.1.20:21114/console/
+  网页远控：        http://192.168.1.20:21114/web/（登录后自动进入）
   健康检查：        http://127.0.0.1:21114/api/health
   数据目录：        /path/to/rustdesk-api-server/data
   按 Ctrl+C 停止服务
@@ -36,6 +37,18 @@ rustdesk-api-server.exe
 ```
 
 - 用浏览器打开上面的控制台地址（服务器无桌面环境时不会自动拉起浏览器，复制地址即可）。
+- 免安装包已内置网页远控：首次启动会把内置的 Web 客户端解压到 `data/webroot/web`。登录控制台后点侧栏「网页远控」，或直接打开 `http://<IP>:21114/web/`（未登录时会提示先登录，登录后自动进入并复用控制台登录态，无需二次登录）。
+- 免安装版没有 nginx 代理 WebSocket，网页远控需要直连 hbbs/hbbr 的 WebSocket 端口（`21118`/`21119`）。在 `.env` 里填好 hbbs 公钥，并按需配置服务器地址：
+
+  ```ini
+  # 仅填服务器 IP 或基础端口（21116/21117）：Web 核心对 IP 会自动 +2 连接 21118/21119
+  # 如果 hbbs/hbbr 与本程序在同一台机器且使用默认端口，ID_SERVER/RELAY_SERVER 可留空
+  ID_SERVER=192.168.1.20
+  RELAY_SERVER=192.168.1.20
+  RUSTDESK_KEY=<hbbs 的 id_ed25519.pub 内容>
+  ```
+
+  - 如果 hbbs/hbbr 就在本机，写本机局域网 IP（不要写 `127.0.0.1`，否则其他电脑的浏览器连不到）；**不要**把 `ID_SERVER` 写成 `IP:21118`（会被自动 `+2` 拼成 `21120`），若使用非标准 WS 端口请写显式地址，例如 `ws://192.168.1.20:21118/ws/id`。
 - 客户端里把「API 服务器」填成 `http://<这台机器的IP>:21114`
 - 首次启动会自动创建 `data/` 目录（数据库、录像、日志）并生成 `data/secret_key`，无需任何配置。
 
@@ -52,6 +65,12 @@ rustdesk-api-server.exe
 | `ALLOW_REGISTRATION` | 是否允许自助注册 | `0` |
 | `TOKEN_TTL_SECONDS` | 客户端令牌有效期（滑动） | 30 天 |
 | `HTTPS` / `BEHIND_PROXY` | 放在 HTTPS 反向代理后时设为 `1` | `0` |
+| `TRUSTED_PROXY_COUNT` | 多层代理（如 CDN + nginx）时的可信代理跳数 | 自动推导 |
+| `ID_SERVER` | 网页远控信令服务器（IP 填裸 IP 或 `:21116`，不要填 `:21118`；或填显式 `ws(s)://...`） | 当前访问 IP/域名 |
+| `RELAY_SERVER` | 网页远控中继服务器（同机同域一般留空；IP 填裸 IP 或 `:21117`） | 留空 |
+| `API_SERVER` | 网页远控调用的 API 地址 | 当前请求地址 |
+| `RUSTDESK_KEY` | hbbs 公钥（`id_ed25519.pub` 内容，网页远控连接必填） | 留空 |
+| `WEBCLIENT_ROOT` | 网页远控静态目录，一般不用改 | `data/webroot/web` |
 
 如需关闭自动打开浏览器，设置 `OPEN_BROWSER=0`。修改端口示例：
 

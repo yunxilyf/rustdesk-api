@@ -110,7 +110,7 @@ OIDC_SCOPES=openid profile email
    HttpOnly 的短效 `oidc_console_state` cookie，然后 302 到提供方；
 2. 提供方回调 `/api/oidc/callback`，服务端先核对 state 与 cookie 是否同源同浏览器，
    再换 token、解析账号（不一致直接 400，避免有人把自己的登录链接发给别人）；
-3. 成功后**建立控制台 Session** 并 302 回 `/console/`，删掉这条 `OidcLogin` 并清除 cookie；
+3. 成功后**建立控制台 Session** 并 302 回 `/console/`（当入口带白名单参数 `next=/web/` 时直接 302 回 `/web/`），删掉这条 `OidcLogin` 并清除 cookie；
    失败则显示原因（未验证邮箱、账号被禁用、未注册等）。
 
 与客户端流程共用同一份登录方式配置；控制台流程不签发 RustDesk 客户端令牌，

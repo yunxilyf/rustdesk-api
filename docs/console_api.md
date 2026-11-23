@@ -14,14 +14,14 @@
 |---|---|---|---|
 | PATCH | `/api/console/me` | 本人修改 `display_name` / `email`（邮箱仅备注） |
 | POST | `/api/console/login` | `{username, password}` | `{ok:true, user:User}`；失败 400 `{ok:false,msg}` |
-| POST | `/api/console/logout` | — | `{ok:true}` |
+| POST | `/api/console/logout` | — | `{ok:true}`；同时撤销当前会话对应的 Web 端令牌并通过跨标签页通知断开正在进行的网页远控 |
 | GET | `/api/console/me` | — | `{user:User}` |
 | PUT | `/api/console/me/password` | `{old, password}` | `{ok:true}` / 400 |
 | GET | `/api/console/setup` | — | `{ok, needs_setup, web_setup_enabled, allow_registration}` |
 | POST | `/api/console/setup` | `{username, password, setup_token}` | 空库且部署初始化密钥有效时创建首个管理员并登录 |
 | POST | `/api/console/register` | `{username, password}` | 自助注册；受「允许注册」开关控制，关闭时返回 `{ok:false}`；用户名 3~50、密码≥8 |
 | GET | `/api/console/login-options` | — | **匿名可读**；`{ok:true, providers:[{op, name, type}]}`，登录页据此渲染第三方登录按钮（`type` 取 `oidc`/`github`/`google`，用于挑图标与配色；只给 op、显示名与类型，不含 issuer/密钥；配置不完整或已停用的登录方式不会返回） |
-| GET | `/api/oidc/console/auth?op=<op>` | — | **匿名可读**；控制台第三方登录入口，302 跳转到提供方；成功后由 `/api/oidc/callback` 建立会话并 302 回 `/console/` |
+| GET | `/api/oidc/console/auth?op=<op>&next=/web/` | — | **匿名可读**；控制台第三方登录入口，302 跳转到提供方；成功后由 `/api/oidc/callback` 建立会话并 302 回 `/console/`（若 `next=/web/` 则直达网页远控，其他外部地址忽略） |
 | GET | `/api/console/settings` | — | `{ok, allow_registration, is_admin}`；管理员额外带 `oidc:{enabled, providers:[Provider], redirect_uri}`（登录用户可读） |
 | GET | `/api/console/version` | — | `{ok, version, latest, update_available, release_url, error}`；GitHub 查询结果缓存 10 分钟，网络失败时 `error` 有值但不影响其它功能 |
 | PUT | `/api/console/settings` | `{allow_registration: bool, oidc?: {...}}` | 管理员开关注册 / 保存第三方登录方式；非管理员 403 |

@@ -2,9 +2,9 @@
 
 Optional third-party sign-in with multiple providers side by side — generic OIDC (Keycloak, Authentik, Entra), Google, and GitHub — available from both the client and the console login page. With self-registration disabled, third-party sign-in can only reach existing accounts; see [docs/oidc.md](docs/oidc.md).
 
-[简体中文](README.md) · [Deployment guide](docs/deployment.md) · [Client API](docs/client_api_contract.md) · [Console API](docs/console_api.md)
+[简体中文](README.md) · [Deployment guide](docs/deployment.md) · [Web client](docs/webclient.md) · [Client API](docs/client_api_contract.md) · [Console API](docs/console_api.md) · [OIDC sign-in](docs/oidc.md)
 
-A Django API server and Vue/TDesign console for self-hosted RustDesk. It adds accounts, address books, device ownership, and connection and file audit logs to an existing hbbs/hbbr deployment.
+A Django API server, Vue/TDesign console, and built-in Web client for self-hosted RustDesk. It adds accounts, address books, device ownership, browser remote desktop (shared session login, instant disconnect on logout, personal address book saved-password autofill), and connection/file audit logs to an existing hbbs/hbbr deployment.
 
 [![CI](https://github.com/yunxilyf/rustdesk-api/actions/workflows/ci.yml/badge.svg)](https://github.com/yunxilyf/rustdesk-api/actions/workflows/ci.yml)
 ![RustDesk 1.5.x](https://img.shields.io/badge/RustDesk-1.5.x-0A5BE0)
@@ -34,9 +34,18 @@ python manage.py runserver 127.0.0.1:21114
 
 Open the [console](http://127.0.0.1:21114/console/) and sign in with the new account. The RustDesk client uses this service as its API server. Its ID and relay settings still point to hbbs/hbbr.
 
+## Standalone binaries
+
+If you prefer not to install Docker or Python, download the self-contained packages from GitHub Releases:
+
+- `rustdesk-api-server-<version>-linux-x86_64.tar.gz`: extract and run `./rustdesk-api-server`
+- `rustdesk-api-server-<version>-windows-x64.zip`: extract and launch `rustdesk-api-server.exe`
+
+On first start, the binary creates `data/` alongside the executable, unpacks the bundled Web client into `data/webroot/web`, generates a random secret key, and listens on port `21114`. See [deploy/README-STANDALONE.md](deploy/README-STANDALONE.md) for details.
+
 ## Deploy with Compose
 
-The published Linux amd64 and arm64 images include the built console.
+The published Linux amd64 and arm64 images bundle the console, built-in nginx, and prebuilt Web client on a single port (`21114`).
 
 | Registry | Image |
 | --- | --- |
@@ -46,10 +55,12 @@ The published Linux amd64 and arm64 images include the built console.
 Save the [Compose template](deploy/docker-compose.quickstart.yml) as `docker-compose.yml` and the [environment sample](.env.example) as `.env`. Set a random `SECRET_KEY`, then run the following commands.
 
 ```bash
-mkdir -p data/db data/records data/logs
+mkdir -p data/db data/records data/logs webroot
 docker compose up -d
 docker compose exec rustdesk-api python manage.py ensure_admin
 curl -fsS http://127.0.0.1:21114/api/health
+# Console:    http://127.0.0.1:21114/console/
+# Web client: http://127.0.0.1:21114/web/ (shares console login automatically)
 ```
 
 The quickstart template publishes port 21114 on all interfaces for LAN trials; restrict it with a firewall or put it behind an HTTPS reverse proxy. `deploy/docker-compose.prod.yaml` binds to `127.0.0.1` only. For remote clients, set up an HTTPS reverse proxy and configure `ALLOWED_HOSTS`, `CSRF_TRUSTED_ORIGINS`, `HTTPS=1`, and `BEHIND_PROXY=1`.
@@ -75,4 +86,4 @@ Frontend source and lockfiles are in `frontend/`. Vite writes the generated cons
 
 ## Credits and license
 
-This independent implementation follows the RustDesk 1.5.x client contracts. Thanks to [RustDesk](https://github.com/rustdesk/rustdesk) and its community. Released under the [MIT License](LICENSE).
+This independent implementation follows the RustDesk 1.5.x client contracts. Thanks to [RustDesk](https://github.com/rustdesk/rustdesk) and its community. Released under the [MIT License](LICENSE). The built-in Web client is distributed as a prebuilt package (`deploy/web/rustdesk-web-1.5.3.tar.gz`) derived from temandroid/rustdesk-web (**AGPL-3.0**, source not bundled in this repository); see [docs/webclient.md](docs/webclient.md).

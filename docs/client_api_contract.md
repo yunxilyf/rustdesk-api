@@ -33,7 +33,7 @@ hbbs / hbbr 是二进制协议和 WebSocket 服务，**不提供 HTTP API**，�
 | 方法 | 路径 | 请求 | 成功响应 |
 |---|---|---|---|
 | POST | `/api/login` | `username,password,id,uuid,autoLogin,type,verificationCode?,tfaCode?,secret?,deviceInfo` | `{access_token,type:"access_token",user:{name,display_name,avatar,email,note,verifier,status,is_admin}}` |
-| POST | `/api/logout` | Bearer，`{id,uuid}` | 任意 JSON（客户端忽略正文） |
+| POST | `/api/logout` | Bearer，`{id,uuid}` | 任意 JSON（客户端忽略正文）；当退出的令牌绑定当前浏览器控制台会话（Web 客户端）时，会同步退出控制台 Session |
 | POST | `/api/currentUser` | Bearer，`{id,uuid}` | 顶层 User 对象（`name` 必需）；400/401 清空本地登录 |
 | GET | `/api/login-options` | 无认证 | **JSON 字符串数组**；没有启用的第三方登录时返回 `[]`；否则首项为 `common-oidc/<json>`（完整按钮列表 `[{"name":"<按钮名称>"}, ...]`），其后每个 `oidc/<op>` 兼容旧客户端 |
 | HEAD | `/api/login-options` | 无认证 | 仅用于 TLS 连通性探测 |
@@ -114,6 +114,16 @@ Peer 字段：`id,hash,password,username,hostname,platform,alias,tags[],note,log
 | POST | `/api/record` | 历史录像上传 | 410，服务端上传已停用 |
 | POST | `/api/devices/cli` | Bearer，`{id,uuid,user_name?,address_book_name?,device_group_name?,...}` | 空正文（CLI 打印 `Done!`） |
 | POST | `/api/devices/deploy` | Bearer，`{id,uuid,pk}`；普通用户仅登记当前令牌对应设备 | `{result:"OK"}` / `ID_TAKEN` / `INVALID_INPUT` / `NOT_ENABLED` |
+
+## 网页远控扩展端点
+
+以下端点仅用于内置网页远控（`/web/`），不改变 RustDesk 桌面客户端契约：
+
+| 方法 | 路径 | 认证 | 说明 |
+|---|---|---|---|
+| POST | `/api/peers/online` | Bearer | 请求 `{ids:[...]}`（最多 500 个，非管理员按可访问地址簿 + 自有设备过滤），按心跳时间与 `DEVICE_ONLINE_SECONDS` 返回 `{online:[...]}` |
+| GET | `/api/webclient/auth` | 控制台 Session | 供 nginx `auth_request` 与网页端定时探测使用；已登录且启用返回 `204` + `X-Webclient-Session`，否则 `401` |
+| GET | `/api/webclient/config.js`（`/web/rd-config.js`） | 控制台 Session | 未登录返回 `401`；已登录返回 `window.RD_CONFIG = {...};`（含 `idServer`/`apiServer`/`relayServer`/`key` 与当前会话绑定的 `accessToken`/`userInfo`/`authCheckUrl`/`loginUrl`/`sessionId`，附带 `Cache-Control: no-store`、`Cross-Origin-Resource-Policy: same-origin`） |
 
 ## 本仓库实现状态
 
