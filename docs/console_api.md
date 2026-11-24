@@ -142,5 +142,6 @@ provider 配置和 `OidcLogin` 状态表，区别只有两点：
 - 依赖：`vue@3`、`vue-router@4`、`tdesign-vue-next`、`tdesign-icons-vue-next`、`vite`、`@vitejs/plugin-vue`
 - 开发代理：`/api` → `http://127.0.0.1:21114`
 - 路由：`/console/` 用 hash 路由（`createWebHashHistory`），避免 Django 端 404
-- 页面：登录、概览、设备、地址簿（主从：左列表右联系人+标签）、分组、用户、连接日志、文件日志、个人设置
-- 统一处理 401 → 跳登录页；403 → `MessagePlugin.error('无权限')`
+- 页面：登录（双栏布局）、概览（KPI + 最近连接 + 在线设备速览）、设备（含硬件详情抽屉）、地址簿（主从：左筛选分组列表 + 右联系人/标签）、分组、用户、连接日志、文件日志、个人设置（分标签页）
+- 外观与多语言：支持浅色 / 深色 / 跟随系统主题（`theme-mode`）与简体中文 / English 实时切换（联动 TDesign `ConfigProvider`）
+- 统一处理 401 → 跳登录页；403 → `MessagePlugin.error(...)`

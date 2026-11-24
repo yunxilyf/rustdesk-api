@@ -4,13 +4,19 @@ Optional third-party sign-in with multiple providers side by side — generic OI
 
 [简体中文](README.md) · [Deployment guide](docs/deployment.md) · [Web client](docs/webclient.md) · [Client API](docs/client_api_contract.md) · [Console API](docs/console_api.md) · [OIDC sign-in](docs/oidc.md)
 
-A Django API server, Vue/TDesign console, and built-in Web client for self-hosted RustDesk. It adds accounts, address books, device ownership, browser remote desktop (shared session login, instant disconnect on logout, personal address book saved-password autofill), and connection/file audit logs to an existing hbbs/hbbr deployment.
+A Django API server, Vue/TDesign console (with light/dark/system themes and Chinese/English switching), and built-in Web client for self-hosted RustDesk. It adds accounts, address books, device ownership, browser remote desktop (shared session login, instant disconnect on logout, personal address book saved-password autofill), and connection/file audit logs to an existing hbbs/hbbr deployment.
 
 [![CI](https://github.com/yunxilyf/rustdesk-api/actions/workflows/ci.yml/badge.svg)](https://github.com/yunxilyf/rustdesk-api/actions/workflows/ci.yml)
 ![RustDesk 1.5.x](https://img.shields.io/badge/RustDesk-1.5.x-0A5BE0)
 [![MIT](https://img.shields.io/badge/License-MIT-green)](LICENSE)
 
-![RustDesk API console](images/console_dashboard.png)
+## Console
+
+| Dashboard | Devices |
+| --- | --- |
+| ![Dashboard](images/console_dashboard_en.png) | ![Devices](images/console_devices_en.png) |
+| **Address Books** | **Users** |
+| ![Address Books](images/console_addressbook_en.png) | ![Users](images/console_users_en.png) |
 
 ## Run locally
 

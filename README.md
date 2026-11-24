@@ -2,7 +2,7 @@
 
 [English](README_EN.md) · [部署指南](docs/deployment.md) · [网页远控](docs/webclient.md) · [客户端 API](docs/client_api_contract.md) · [控制台 API](docs/console_api.md) · [OIDC 登录](docs/oidc.md)
 
-为自建 RustDesk 提供账号、地址簿、设备与审计服务。API 由 Django 提供，管理控制台使用 Vue 3 和 TDesign。侧栏显示当前版本，设置页可一键检查 GitHub 上的新版本。
+为自建 RustDesk 提供账号、地址簿、设备与审计服务。API 由 Django 提供，管理控制台使用 Vue 3 和 TDesign，支持浅色 / 深色 / 跟随系统主题与中英文切换。侧栏显示当前版本，设置页可一键检查 GitHub 上的新版本。
 
 [![CI](https://github.com/yunxilyf/rustdesk-api/actions/workflows/ci.yml/badge.svg)](https://github.com/yunxilyf/rustdesk-api/actions/workflows/ci.yml)
 ![Python 3.12+](https://img.shields.io/badge/Python-3.12%2B-3776AB)
