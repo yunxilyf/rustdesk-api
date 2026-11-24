@@ -2,185 +2,266 @@
   <div class="page">
     <div class="page-head">
       <div>
-        <h2 class="page-title">个人设置</h2>
+        <h2 class="page-title">{{ t('settings.title') }}</h2>
+        <p class="page-sub">{{ t('settings.sub') }}</p>
       </div>
     </div>
 
-    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px; max-width: 980px">
-      <div class="panel">
-        <h3 style="margin: 0 0 16px; font-size: 16px">账号信息</h3>
-        <t-form label-width="90px">
-          <t-form-item label="用户名">{{ user?.username }}</t-form-item>
-          <t-form-item label="显示名">
-            <t-input v-model="profile.display_name" :maxlength="64" placeholder="留空则显示用户名" />
-          </t-form-item>
-          <t-form-item label="邮箱">
-            <t-input v-model="profile.email" placeholder="选填，仅作备注，不参与登录" />
-          </t-form-item>
-          <t-form-item label="角色">
-            <t-tag :theme="user?.is_admin ? 'primary' : 'default'" variant="light" size="small">
-              {{ user?.is_admin ? '管理员' : '普通用户' }}
-            </t-tag>
-          </t-form-item>
-          <t-form-item label="状态">
-            <t-tag :theme="user?.is_active ? 'success' : 'default'" variant="light" size="small">
-              {{ user?.is_active ? '启用' : '停用' }}
-            </t-tag>
-          </t-form-item>
-          <t-form-item label=" ">
-            <t-button theme="primary" :loading="savingProfile" @click="saveProfile">保存资料</t-button>
-          </t-form-item>
-        </t-form>
-      </div>
-
-      <div class="panel">
-        <h3 style="margin: 0 0 16px; font-size: 16px">修改密码</h3>
-        <t-form label-width="90px" :data="form" @submit="submit">
-          <t-form-item label="当前密码">
-            <t-input v-model="form.old" type="password" placeholder="请输入当前密码" />
-          </t-form-item>
-          <t-form-item label="新密码">
-            <t-input v-model="form.password" type="password" placeholder="至少 8 位" />
-          </t-form-item>
-          <t-form-item label="确认密码">
-            <t-input v-model="form.confirm" type="password" placeholder="再次输入新密码" />
-          </t-form-item>
-          <t-form-item label=" ">
-            <t-button theme="primary" type="submit" :loading="saving">保存</t-button>
-          </t-form-item>
-        </t-form>
-      </div>
-    </div>
-
-
-    <div class="panel" style="margin-top: 16px; max-width: 980px">
-      <h3 style="margin: 0 0 6px; font-size: 16px">软件更新</h3>
-      <div class="muted" style="margin-bottom: 16px">当前版本 {{ versionInfo.version || '-' }}</div>
-      <div style="display: flex; align-items: center; justify-content: space-between; gap: 24px">
-        <div>
-          <div v-if="versionInfo.update_available" style="font-weight: 500">
-            发现新版本 {{ versionInfo.latest }}
-            <a v-if="versionInfo.release_url" :href="versionInfo.release_url" target="_blank" rel="noopener">查看发布说明</a>
-          </div>
-          <div v-else-if="versionInfo.checked && !versionInfo.error" class="muted">已是最新版本</div>
-          <div v-else-if="versionInfo.error" class="muted">检查失败：{{ versionInfo.error }}</div>
-          <div v-else class="muted">点击右侧按钮检查 GitHub 上是否有新版本</div>
-        </div>
-        <t-button variant="outline" :loading="checking" @click="checkUpdate">检查更新</t-button>
-      </div>
-    </div>
-
-    <div v-if="user?.is_admin" class="panel" style="margin-top: 16px; max-width: 980px">
-      <h3 style="margin: 0 0 6px; font-size: 16px">第三方登录</h3>
-      <div class="muted" style="margin-bottom: 16px">
-        可配置多个登录方式，客户端登录页会并列显示按钮；回调地址需在身份提供方登记为
-        <code>{{ oidc.redirect_uri || CALLBACK_PLACEHOLDER }}</code>
-      </div>
-
-      <t-collapse v-model="expandedProviders" style="margin-bottom: 12px">
-        <t-collapse-panel v-for="(p, idx) in oidc.providers" :key="idx" :value="idx">
-          <template #header>
-            <div style="display: flex; align-items: center; justify-content: space-between; width: 100%">
-              <span>
-                <strong>{{ p.name || p.type || p.op || '未命名登录方式' }}</strong>
-                <t-tag v-if="p.name && p.type" size="small" variant="light" style="margin-left: 8px">{{ p.type }}</t-tag>
-                <t-tag v-if="p.saved" size="small" theme="success" variant="light" style="margin-left: 6px">已保存</t-tag>
-              </span>
-              <span style="display: flex; align-items: center" @click.stop>
-                <t-switch v-model="p.enabled" size="small" />
-                <span class="muted" style="margin: 0 12px 0 6px">启用</span>
-                <t-button variant="text" theme="danger" size="small" @click.stop="removeProvider(idx)">删除</t-button>
-              </span>
-            </div>
-          </template>
-          <t-form label-width="110px">
-                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0 16px">
-                      <t-form-item label="类型">
-                        <t-select v-model="p.type" :options="OAUTH_TYPES" style="width: 100%" @change="() => syncOpFromType(p)" />
-                      </t-form-item>
-                      <t-form-item label="标识 op">
-                        <t-input
-                          v-model="p.op"
-                          :maxlength="32"
-                          :disabled="p.saved"
-                          :placeholder="p.saved ? '保存后不可修改' : '跟随类型自动填充'"
-                          @change="() => (p.op_fixed = !!p.op)"
-                        />
-                        <div v-if="p.saved" class="muted" style="font-size: 12px">标识参与账号绑定，保存后不可修改</div>
-                      </t-form-item>
-                      <t-form-item label="按钮名称">
-                        <t-input v-model="p.name" :maxlength="64" placeholder="留空则用标识" />
-                      </t-form-item>
-                      <t-form-item label="排序">
-                        <t-input-number v-model="p.sort" theme="normal" style="width: 100%" />
-                      </t-form-item>
-                    </div>
-                    <t-form-item v-if="p.type !== 'github'" label="Issuer">
-                      <t-input v-model="p.issuer" placeholder="https://id.example.com/realms/main（Google 可留空）" />
+    <div class="settings-wrap">
+      <div class="settings-tabs-panel">
+        <t-tabs v-model="activeTab">
+          <t-tab-panel value="account" :label="t('settings.tabAccount')">
+            <div class="settings-tab-body settings-stack">
+              <div class="settings-grid">
+                <div class="settings-section">
+                  <h3 class="settings-section-title">{{ t('settings.profileTitle') }}</h3>
+                  <p class="settings-section-sub">{{ t('settings.profileSub') }}</p>
+                  <t-form label-width="102px">
+                    <t-form-item :label="t('settings.fieldUsername')">
+                      <span class="mono">{{ user?.username }}</span>
                     </t-form-item>
-                    <t-form-item label="Client ID">
-                      <t-input v-model="p.client_id" placeholder="rustdesk-api" />
+                    <t-form-item :label="t('settings.fieldDisplayName')">
+                      <t-input v-model="profile.display_name" :maxlength="64" :placeholder="t('settings.displayNamePlaceholder')" />
                     </t-form-item>
-                    <t-form-item label="Client Secret">
-                      <t-input
-                        v-model="p.client_secret"
-                        type="password"
-                        :placeholder="p.has_secret && !p.clear_secret ? '已保存，留空则不修改' : '填写客户端密钥'"
+                    <t-form-item :label="t('settings.fieldEmail')">
+                      <t-input v-model="profile.email" :placeholder="t('settings.emailPlaceholder')" />
+                    </t-form-item>
+                    <t-form-item :label="t('settings.fieldRole')">
+                      <t-tag :theme="user?.is_admin ? 'primary' : 'default'" variant="light" size="small">
+                        {{ user?.is_admin ? t('common.admin') : t('common.user') }}
+                      </t-tag>
+                    </t-form-item>
+                    <t-form-item :label="t('common.status')">
+                      <StatusDot
+                        :status="user?.is_active ? 'online' : 'offline'"
+                        :label="user?.is_active ? t('common.enabled') : t('common.disabled')"
+                        :pulse="false"
                       />
                     </t-form-item>
-                    <t-form-item label="Scopes">
-                      <t-input v-model="p.scopes" placeholder="留空使用默认值" />
-                    </t-form-item>
                     <t-form-item label=" ">
-                      <t-checkbox v-model="p.auto_register">允许自动创建账号</t-checkbox>
-                      <t-checkbox v-model="p.pkce_enable" style="margin-left: 16px">启用 PKCE</t-checkbox>
-                      <t-button
-                        v-if="p.has_secret && !p.clear_secret"
-                        variant="text"
-                        theme="danger"
-                        style="margin-left: 8px"
-                        @click="markClearSecret(p)"
-                      >
-                        清除密钥
+                      <t-button theme="primary" :loading="savingProfile" @click="saveProfile">
+                        {{ t('settings.saveProfileBtn') }}
                       </t-button>
-                      <span v-if="p.clear_secret" class="muted" style="margin-left: 8px">保存后清除已存密钥</span>
-                      <t-button v-if="p.clear_secret" variant="text" size="small" @click="undoClearSecret(p)">撤销</t-button>
                     </t-form-item>
                   </t-form>
-        </t-collapse-panel>
-      </t-collapse>
+                </div>
 
-      <div v-if="oidcLoading" class="muted" style="margin-bottom: 12px">正在加载登录方式…</div>
-      <div v-else-if="!oidc.providers.length" class="muted" style="margin-bottom: 12px">
-        <template v-if="oidcLoaded">尚未配置任何登录方式，客户端登录页不会显示第三方登录按钮。</template>
-        <template v-else>加载失败，请刷新页面后重试（当前不可保存，避免覆盖已有配置）。</template>
-      </div>
-      <t-button variant="outline" @click="addProvider">添加登录方式</t-button>
-      <t-button theme="primary" :loading="savingOidc" :disabled="!oidcLoaded" style="margin-left: 8px" @click="saveOidc">
-        保存全部
-      </t-button>
-      <div class="muted" style="margin-top: 12px">
-        当前状态：<t-tag :theme="oidc.enabled ? 'success' : 'default'" variant="light" size="small">
-          {{ oidc.enabled ? '已启用' : '未启用' }}
-        </t-tag>
-      </div>
-    </div>
+                <div class="settings-section">
+                  <h3 class="settings-section-title">{{ t('settings.passwordTitle') }}</h3>
+                  <p class="settings-section-sub">{{ t('settings.passwordSub') }}</p>
+                  <t-form label-width="96px" :data="form" @submit="submit">
+                    <t-form-item :label="t('settings.fieldOldPassword')">
+                      <t-input v-model="form.old" type="password" :placeholder="t('settings.oldPasswordPlaceholder')" />
+                    </t-form-item>
+                    <t-form-item :label="t('settings.fieldNewPassword')">
+                      <t-input v-model="form.password" type="password" :placeholder="t('settings.newPasswordPlaceholder')" />
+                    </t-form-item>
+                    <t-form-item :label="t('settings.fieldConfirmPassword')">
+                      <t-input v-model="form.confirm" type="password" :placeholder="t('settings.confirmPasswordPlaceholder')" />
+                    </t-form-item>
+                    <t-form-item label=" ">
+                      <t-button theme="primary" type="submit" :loading="saving">{{ t('common.save') }}</t-button>
+                    </t-form-item>
+                  </t-form>
+                </div>
+              </div>
 
-    <div v-if="user?.is_admin" class="panel" style="margin-top: 16px; max-width: 980px">
-      <h3 style="margin: 0 0 6px; font-size: 16px">系统设置</h3>
-      <div class="muted" style="margin-bottom: 16px">仅管理员可见，修改后立即生效</div>
-      <div style="display: flex; align-items: center; justify-content: space-between; gap: 24px">
-        <div>
-          <div style="font-weight: 500">允许用户自助注册</div>
-          <div class="muted" style="margin-top: 4px">
-            开启后，登录页可自助注册普通账号；关闭后仅管理员能在「用户」页添加账号。
-          </div>
-        </div>
-        <t-switch
-          v-model="settings.allow_registration"
-          :loading="savingSetting"
-          @change="saveSetting"
-        />
+              <div class="settings-section">
+                <div class="setting-row">
+                  <div>
+                    <div class="setting-row-title">{{ t('settings.appearanceTitle') }}</div>
+                    <div class="setting-row-desc">{{ t('settings.appearanceDesc') }}</div>
+                  </div>
+                  <t-radio-group :value="themeState.mode" variant="default-filled" @change="setThemeMode">
+                    <t-radio-button value="light">{{ t('theme.light') }}</t-radio-button>
+                    <t-radio-button value="dark">{{ t('theme.dark') }}</t-radio-button>
+                    <t-radio-button value="system">{{ t('theme.system') }}</t-radio-button>
+                  </t-radio-group>
+                </div>
+
+                <div class="setting-row setting-row-divider">
+                  <div>
+                    <div class="setting-row-title">{{ t('lang.label') }}</div>
+                    <div class="setting-row-desc">{{ t('lang.desc') }}</div>
+                  </div>
+                  <t-radio-group :value="i18nState.locale" variant="default-filled" @change="setLocale">
+                    <t-radio-button v-for="loc in LOCALES" :key="loc.value" :value="loc.value">
+                      {{ loc.label }}
+                    </t-radio-button>
+                  </t-radio-group>
+                </div>
+              </div>
+            </div>
+          </t-tab-panel>
+
+          <t-tab-panel v-if="user?.is_admin" value="oidc" :label="t('settings.tabOidc')">
+            <div class="settings-tab-body">
+              <div class="settings-section">
+                <h3 class="settings-section-title">{{ t('settings.oidcTitle') }}</h3>
+                <p class="settings-section-sub">
+                  {{ t('settings.oidcSub') }}
+                  <code>{{ oidc.redirect_uri || CALLBACK_PLACEHOLDER }}</code>
+                </p>
+
+                <t-collapse v-if="oidc.providers.length" v-model="expandedProviders" class="oidc-collapse">
+                  <t-collapse-panel v-for="(p, idx) in oidc.providers" :key="idx" :value="idx">
+                    <template #header>
+                      <div class="oidc-header">
+                        <span class="oidc-header-left">
+                          <strong>{{ p.name || p.type || p.op || t('settings.unnamedProvider') }}</strong>
+                          <t-tag v-if="p.name && p.type" size="small" variant="light">{{ p.type }}</t-tag>
+                          <t-tag v-if="p.saved" size="small" theme="success" variant="light">{{ t('settings.savedTag') }}</t-tag>
+                        </span>
+                        <span class="oidc-header-right" @click.stop>
+                          <t-switch v-model="p.enabled" size="small" />
+                          <span class="muted">{{ t('common.enabled') }}</span>
+                          <t-button variant="text" theme="danger" size="small" @click.stop="removeProvider(idx)">
+                            {{ t('common.delete') }}
+                          </t-button>
+                        </span>
+                      </div>
+                    </template>
+
+                    <t-form label-width="116px">
+                      <div class="oidc-grid">
+                        <t-form-item :label="t('settings.fieldType')">
+                          <t-select v-model="p.type" :options="oauthTypes" class="full-width" @change="() => syncOpFromType(p)" />
+                        </t-form-item>
+                        <t-form-item :label="t('settings.fieldOp')">
+                          <div class="full-width">
+                            <t-input
+                              v-model="p.op"
+                              :maxlength="32"
+                              :disabled="p.saved"
+                              :placeholder="p.saved ? t('settings.opSavedPlaceholder') : t('settings.opAutoPlaceholder')"
+                              @change="() => (p.op_fixed = !!p.op)"
+                            />
+                            <div v-if="p.saved" class="field-hint">{{ t('settings.opSavedHint') }}</div>
+                          </div>
+                        </t-form-item>
+                        <t-form-item :label="t('settings.fieldBtnName')">
+                          <t-input v-model="p.name" :maxlength="64" :placeholder="t('settings.btnNamePlaceholder')" />
+                        </t-form-item>
+                        <t-form-item :label="t('settings.fieldSort')">
+                          <t-input-number v-model="p.sort" theme="normal" class="full-width" />
+                        </t-form-item>
+                      </div>
+                      <t-form-item v-if="p.type !== 'github'" label="Issuer">
+                        <t-input v-model="p.issuer" :placeholder="t('settings.issuerPlaceholder')" />
+                      </t-form-item>
+                      <t-form-item label="Client ID">
+                        <t-input v-model="p.client_id" placeholder="rustdesk-api" />
+                      </t-form-item>
+                      <t-form-item label="Client Secret">
+                        <t-input
+                          v-model="p.client_secret"
+                          type="password"
+                          :placeholder="p.has_secret && !p.clear_secret ? t('settings.secretSavedPlaceholder') : t('settings.secretFillPlaceholder')"
+                        />
+                      </t-form-item>
+                      <t-form-item label="Scopes">
+                        <t-input v-model="p.scopes" :placeholder="t('settings.scopesPlaceholder')" />
+                      </t-form-item>
+                      <t-form-item label=" ">
+                        <div class="oidc-checkbox-row">
+                          <t-checkbox v-model="p.auto_register">{{ t('settings.autoRegister') }}</t-checkbox>
+                          <t-checkbox v-model="p.pkce_enable">{{ t('settings.enablePkce') }}</t-checkbox>
+                          <t-button
+                            v-if="p.has_secret && !p.clear_secret"
+                            variant="text"
+                            theme="danger"
+                            @click="markClearSecret(p)"
+                          >
+                            {{ t('settings.clearSecret') }}
+                          </t-button>
+                          <span v-if="p.clear_secret" class="muted">{{ t('settings.clearSecretHint') }}</span>
+                          <t-button v-if="p.clear_secret" variant="text" size="small" @click="undoClearSecret(p)">
+                            {{ t('settings.undo') }}
+                          </t-button>
+                        </div>
+                      </t-form-item>
+                    </t-form>
+                  </t-collapse-panel>
+                </t-collapse>
+
+                <div v-if="oidcLoading" class="muted mb-md">{{ t('settings.oidcLoading') }}</div>
+                <div v-else-if="!oidc.providers.length" class="muted mb-md">
+                  <template v-if="oidcLoaded">{{ t('settings.oidcEmpty') }}</template>
+                  <template v-else>{{ t('settings.oidcLoadFailed') }}</template>
+                </div>
+
+                <div class="oidc-actions">
+                  <t-button variant="outline" @click="addProvider">
+                    <template #icon><t-icon name="add" /></template>
+                    {{ t('settings.addProvider') }}
+                  </t-button>
+                  <t-button theme="primary" :loading="savingOidc" :disabled="!oidcLoaded" @click="saveOidc">
+                    {{ t('settings.saveAll') }}
+                  </t-button>
+                </div>
+
+                <div class="oidc-status">
+                  <span>{{ t('settings.currentStatus') }}</span>
+                  <StatusDot
+                    :status="oidc.enabled ? 'online' : 'offline'"
+                    :label="oidc.enabled ? t('settings.oidcEnabled') : t('settings.oidcDisabled')"
+                    :pulse="false"
+                  />
+                </div>
+              </div>
+            </div>
+          </t-tab-panel>
+
+          <t-tab-panel value="system" :label="t('settings.tabSystem')">
+            <div class="settings-tab-body settings-stack">
+              <div v-if="user?.is_admin" class="settings-section">
+                <h3 class="settings-section-title">{{ t('settings.regPolicyTitle') }}</h3>
+                <p class="settings-section-sub">{{ t('settings.regPolicySub') }}</p>
+                <div class="setting-row">
+                  <div>
+                    <div class="setting-row-title">{{ t('settings.allowRegTitle') }}</div>
+                    <div class="setting-row-desc">{{ t('settings.allowRegDesc') }}</div>
+                  </div>
+                  <t-switch v-model="settings.allow_registration" :loading="savingSetting" @change="saveSetting" />
+                </div>
+              </div>
+
+              <div class="settings-section">
+                <h3 class="settings-section-title">{{ t('settings.updateTitle') }}</h3>
+                <p class="settings-section-sub">
+                  {{ t('settings.currentVersion') }} <span class="mono">{{ versionInfo.version || '-' }}</span>
+                </p>
+                <div class="setting-row">
+                  <div>
+                    <div v-if="versionInfo.update_available" class="setting-row-title">
+                      {{ t('settings.newVersionFound') }} <span class="mono">{{ versionInfo.latest }}</span>
+                      <t-link
+                        v-if="versionInfo.release_url"
+                        theme="primary"
+                        class="link-gap"
+                        :href="versionInfo.release_url"
+                        target="_blank"
+                      >
+                        {{ t('settings.viewReleaseNotes') }}
+                      </t-link>
+                    </div>
+                    <div v-else-if="versionInfo.checked && !versionInfo.error" class="setting-row-desc">
+                      {{ t('settings.upToDate') }}
+                    </div>
+                    <div v-else-if="versionInfo.error" class="setting-row-desc">
+                      {{ t('settings.checkFailed', { error: versionInfo.error }) }}
+                    </div>
+                    <div v-else class="setting-row-desc">{{ t('settings.checkHint') }}</div>
+                  </div>
+                  <t-button variant="outline" :loading="checking" @click="checkUpdate">
+                    <template #icon><t-icon name="refresh" /></template>
+                    {{ t('settings.checkUpdateBtn') }}
+                  </t-button>
+                </div>
+              </div>
+            </div>
+          </t-tab-panel>
+        </t-tabs>
       </div>
     </div>
   </div>
@@ -191,8 +272,12 @@ import { computed, onMounted, reactive, ref } from 'vue'
 import { DialogPlugin, MessagePlugin } from 'tdesign-vue-next'
 import { api } from '../api'
 import { setUser, store } from '../store'
+import { setThemeMode, themeState } from '../theme'
+import { LOCALES, i18nState, setLocale, t } from '../i18n'
+import StatusDot from '../components/StatusDot.vue'
 
 const user = computed(() => store.user)
+const activeTab = ref('account')
 const saving = ref(false)
 const savingProfile = ref(false)
 const profile = reactive({ display_name: '', email: '' })
@@ -204,11 +289,11 @@ const oidc = reactive({ enabled: false, redirect_uri: '', providers: [] })
 const expandedProviders = ref([])
 const oidcLoaded = ref(false)
 const oidcLoading = ref(false)
-const OAUTH_TYPES = [
-  { value: 'oidc', label: '通用 OIDC' },
+const oauthTypes = computed(() => [
+  { value: 'oidc', label: t('settings.typeOidc') },
   { value: 'github', label: 'GitHub' },
   { value: 'google', label: 'Google' },
-]
+])
 const CALLBACK_PLACEHOLDER = 'https://rustdesk.example.com/api/oidc/callback'
 const checking = ref(false)
 const versionInfo = reactive({ version: '', latest: '', update_available: false, release_url: '', error: '', checked: false })
@@ -226,7 +311,7 @@ async function checkUpdate() {
       checked: true,
     })
   } catch (e) {
-    versionInfo.error = e.message || '检查失败'
+    versionInfo.error = e.message || t('common.loadFailed')
     versionInfo.checked = true
   } finally {
     checking.value = false
@@ -323,8 +408,8 @@ function removeProvider(index) {
     return
   }
   DialogPlugin.confirm({
-    header: '删除登录方式',
-    body: `删除「${provider.name || provider.op}」后，已绑定的用户将无法再用它登录，确定继续？`,
+    header: t('settings.deleteProviderHeader'),
+    body: t('settings.deleteProviderBody', { name: provider.name || provider.op }),
     theme: 'warning',
     onConfirm: () => {
       oidc.providers.splice(index, 1)
@@ -348,9 +433,9 @@ async function saveSetting(value) {
   savingSetting.value = true
   try {
     await api.updateSettings({ allow_registration: !!value })
-    MessagePlugin.success(value ? '已开启用户注册' : '已关闭用户注册')
+    MessagePlugin.success(value ? t('settings.regEnabledToast') : t('settings.regDisabledToast'))
   } catch (e) {
-    MessagePlugin.error(e.message || '保存失败')
+    MessagePlugin.error(e.message || t('common.saveFailed'))
     await loadSettings()
   } finally {
     savingSetting.value = false
@@ -359,7 +444,7 @@ async function saveSetting(value) {
 
 async function saveOidc() {
   if (!oidcLoaded.value) {
-    MessagePlugin.warning('登录方式配置尚未加载成功，请刷新页面后重试')
+    MessagePlugin.warning(t('settings.warnOidcNotLoaded'))
     return
   }
   const seen = new Set()
@@ -367,30 +452,30 @@ async function saveOidc() {
   for (const [idx, p] of oidc.providers.entries()) {
     const op = (p.op || p.type || '').trim()
     if (!op) {
-      MessagePlugin.warning(`第 ${idx + 1} 个登录方式缺少标识 op`)
+      MessagePlugin.warning(t('settings.warnMissingOp', { index: idx + 1 }))
       return
     }
     if (seen.has(op)) {
-      MessagePlugin.warning(`标识 op 重复：${op}`)
+      MessagePlugin.warning(t('settings.warnDuplicateOp', { op }))
       return
     }
     seen.add(op)
     const clientId = (p.client_id || '').trim()
     if (!clientId) {
-      MessagePlugin.warning(`${op} 缺少 Client ID`)
+      MessagePlugin.warning(t('settings.warnMissingClientId', { op }))
       return
     }
     const issuer = (p.issuer || '').trim()
     if (p.type !== 'github' && !issuer) {
-      MessagePlugin.warning(`${op} 缺少 Issuer`)
+      MessagePlugin.warning(t('settings.warnMissingIssuer', { op }))
       return
     }
     if (issuer && !/^https?:\/\//i.test(issuer)) {
-      MessagePlugin.warning(`${op} 的 Issuer 必须是 http(s) 地址`)
+      MessagePlugin.warning(t('settings.warnInvalidIssuer', { op }))
       return
     }
     if (!p.has_secret && !p.client_secret && !p.clear_secret) {
-      MessagePlugin.warning(`${op} 缺少 Client Secret`)
+      MessagePlugin.warning(t('settings.warnMissingSecret', { op }))
       return
     }
     const item = {
@@ -412,8 +497,8 @@ async function saveOidc() {
   if (!items.length) {
     const confirmed = await new Promise((resolve) => {
       DialogPlugin.confirm({
-        header: '清空第三方登录',
-        body: '当前没有保留任何登录方式，保存后会删除服务器上的全部配置，客户端与控制台将不再显示第三方登录按钮。确定继续？',
+        header: t('settings.clearOidcHeader'),
+        body: t('settings.clearOidcBody'),
         theme: 'warning',
         onConfirm: () => resolve(true),
         onCancel: () => resolve(false),
@@ -425,10 +510,10 @@ async function saveOidc() {
   savingOidc.value = true
   try {
     await api.updateSettings({ oidc: { providers: items } })
-    MessagePlugin.success('第三方登录配置已保存')
+    MessagePlugin.success(t('settings.oidcSaved'))
     await loadSettings()
   } catch (e) {
-    MessagePlugin.error(e.message || '保存失败')
+    MessagePlugin.error(e.message || t('common.saveFailed'))
   } finally {
     savingOidc.value = false
   }
@@ -442,7 +527,7 @@ function syncProfile() {
 async function saveProfile() {
   const email = (profile.email || '').trim()
   if (email && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) {
-    MessagePlugin.warning('邮箱格式不正确')
+    MessagePlugin.warning(t('settings.warnInvalidEmail'))
     return
   }
   savingProfile.value = true
@@ -452,9 +537,9 @@ async function saveProfile() {
       email,
     })
     if (data?.user) setUser(data.user)
-    MessagePlugin.success('资料已保存')
+    MessagePlugin.success(t('settings.profileSaved'))
   } catch (e) {
-    MessagePlugin.error(e.message || '保存失败')
+    MessagePlugin.error(e.message || t('common.saveFailed'))
   } finally {
     savingProfile.value = false
   }
@@ -468,26 +553,26 @@ onMounted(() => {
 
 async function submit() {
   if (!form.old || !form.password) {
-    MessagePlugin.warning('请填写完整')
+    MessagePlugin.warning(t('settings.warnFillComplete'))
     return
   }
   if (form.password.length < 8) {
-    MessagePlugin.warning('新密码至少 8 位')
+    MessagePlugin.warning(t('settings.warnNewPasswordLen'))
     return
   }
   if (form.password !== form.confirm) {
-    MessagePlugin.warning('两次输入的密码不一致')
+    MessagePlugin.warning(t('settings.warnPasswordMismatch'))
     return
   }
   saving.value = true
   try {
     await api.changePassword(form.old, form.password)
-    MessagePlugin.success('密码已修改')
+    MessagePlugin.success(t('settings.passwordChanged'))
     form.old = ''
     form.password = ''
     form.confirm = ''
   } catch (e) {
-    MessagePlugin.error(e.message || '修改失败')
+    MessagePlugin.error(e.message || t('settings.passwordChangeFailed'))
   } finally {
     saving.value = false
   }

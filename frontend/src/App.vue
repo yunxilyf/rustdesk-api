@@ -1,22 +1,34 @@
 <template>
-  <router-view />
-  <t-dialog
-    v-model:visible="unauthorizedVisible"
-    header="登录已失效"
-    body="当前会话已过期，请重新登录。"
-    :confirm-btn="{ content: '去登录', theme: 'primary' }"
-    :close-btn="null"
-    @confirm="goLogin"
-  />
+  <t-config-provider :global-config="tdLocale">
+    <router-view />
+    <t-dialog
+      v-model:visible="unauthorizedVisible"
+      :header="t('app.sessionExpiredTitle')"
+      :body="t('app.sessionExpiredBody')"
+      :confirm-btn="{ content: t('app.goLogin'), theme: 'primary' }"
+      :close-btn="null"
+      @confirm="goLogin"
+    />
+  </t-config-provider>
 </template>
 
 <script setup>
-import { onMounted, onUnmounted, ref } from 'vue'
-import { useRouter } from 'vue-router'
+import { onMounted, onUnmounted, ref, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { clearUser } from './store'
+import { i18nState, t, tdLocale } from './i18n'
+import { updatePageTitle } from './router'
 
+const route = useRoute()
 const router = useRouter()
 const unauthorizedVisible = ref(false)
+
+watch(
+  () => i18nState.locale,
+  () => {
+    updatePageTitle(route)
+  },
+)
 
 function onUnauthorized() {
   clearUser()

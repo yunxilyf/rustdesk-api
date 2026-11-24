@@ -2,41 +2,79 @@
   <div class="page">
     <div class="page-head">
       <div>
-        <h2 class="page-title">文件日志</h2>
+        <h2 class="page-title">{{ t('fileLogs.title') }}</h2>
+        <p class="page-sub">{{ t('fileLogs.sub') }}</p>
+      </div>
+      <div class="page-head-actions">
+        <t-button variant="outline" :loading="loading" @click="load">
+          <template #icon><t-icon name="refresh" /></template>
+          {{ t('common.refresh') }}
+        </t-button>
       </div>
     </div>
 
-    <div class="toolbar">
-      <t-input v-model="keyword" placeholder="搜索文件名 / 设备" clearable style="width: 240px" @enter="search" />
-      <t-button theme="primary" @click="search">查询</t-button>
-      <div class="spacer" />
-      <span class="muted">共 {{ total }} 条</span>
-    </div>
+    <div class="table-card">
+      <div class="card-toolbar">
+        <t-input
+          v-model="keyword"
+          class="filter-input"
+          :placeholder="t('fileLogs.searchPlaceholder')"
+          clearable
+          @enter="search"
+          @clear="search"
+        >
+          <template #prefix-icon><t-icon name="search" /></template>
+        </t-input>
+        <t-button theme="primary" @click="search">{{ t('common.search') }}</t-button>
+      </div>
 
-    <t-table :data="rows" :columns="columns" row-key="id" :loading="loading" hover size="medium">
-      <template #direction="{ row }">
-        <t-tag :theme="Number(row.direction) === 1 ? 'warning' : 'success'" variant="light" size="small">
-          {{ Number(row.direction) === 1 ? '上传' : '下载' }}
-        </t-tag>
-      </template>
-      <template #file="{ row }">
-        <span v-if="row.file" class="mono">{{ row.file }}</span>
-        <span v-else class="muted">未记录文件名</span>
-      </template>
-      <template #filesize="{ row }">{{ fmtSize(row.filesize) }}</template>
-      <template #remote_id="{ row }"><span class="mono">{{ row.remote_id || '-' }}</span></template>
-    </t-table>
+      <t-table :data="rows" :columns="columns" row-key="id" :loading="loading" hover size="medium">
+        <template #direction="{ row }">
+          <t-tag :theme="Number(row.direction) === 1 ? 'warning' : 'success'" variant="light" size="small">
+            <span class="dir-badge">
+              <t-icon :name="Number(row.direction) === 1 ? 'upload' : 'download'" size="12px" />
+              <span>{{ Number(row.direction) === 1 ? t('fileLogs.upload') : t('fileLogs.download') }}</span>
+            </span>
+          </t-tag>
+        </template>
+        <template #file="{ row }">
+          <span v-if="row.file" class="mono">{{ row.file }}</span>
+          <span v-else class="muted">{{ t('fileLogs.noFilename') }}</span>
+        </template>
+        <template #filesize="{ row }">
+          <span class="mono text-secondary">{{ fmtSize(row.filesize) }}</span>
+        </template>
+        <template #remote_id="{ row }">
+          <CopyableId :value="row.remote_id" />
+        </template>
+        <template #user_ip="{ row }">
+          <span v-if="row.user_ip" class="mono text-secondary">{{ row.user_ip }}</span>
+          <span v-else class="muted">-</span>
+        </template>
+        <template #logged_at="{ row }">
+          <span class="num text-secondary">{{ row.logged_at || '-' }}</span>
+        </template>
+      </t-table>
 
-    <div class="toolbar" style="justify-content: flex-end; margin-top: 16px">
-      <t-pagination v-model="page.current" v-model:page-size="page.pageSize" :total="total" :page-size-options="[10, 20, 50, 100]" @change="load" />
+      <div class="card-footer">
+        <t-pagination
+          v-model="page.current"
+          v-model:page-size="page.pageSize"
+          :total="total"
+          :page-size-options="[10, 20, 50, 100]"
+          @change="load"
+        />
+      </div>
     </div>
   </div>
 </template>
 
 <script setup>
-import { onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref } from 'vue'
 import { MessagePlugin } from 'tdesign-vue-next'
 import { api } from '../api'
+import { t } from '../i18n'
+import CopyableId from '../components/CopyableId.vue'
 
 const rows = ref([])
 const total = ref(0)
@@ -44,14 +82,14 @@ const loading = ref(false)
 const keyword = ref('')
 const page = reactive({ current: 1, pageSize: 20 })
 
-const columns = [
-  { colKey: 'file', title: '文件', ellipsis: true },
-  { colKey: 'direction', title: '方向', width: 90 },
-  { colKey: 'filesize', title: '大小', width: 110 },
-  { colKey: 'remote_id', title: '对端设备', width: 170 },
-  { colKey: 'user_ip', title: '来源 IP', width: 150 },
-  { colKey: 'logged_at', title: '时间', width: 170 },
-]
+const columns = computed(() => [
+  { colKey: 'file', title: t('fileLogs.colFile'), ellipsis: true, minWidth: 200 },
+  { colKey: 'direction', title: t('fileLogs.colDirection'), width: 112 },
+  { colKey: 'filesize', title: t('fileLogs.colSize'), width: 108 },
+  { colKey: 'remote_id', title: t('fileLogs.colRemoteId'), width: 152 },
+  { colKey: 'user_ip', title: t('fileLogs.colSourceIp'), width: 140 },
+  { colKey: 'logged_at', title: t('fileLogs.colTime'), width: 186 },
+])
 
 function fmtSize(value) {
   // 后端存的是 convert_filesize 生成的可读字符串（如 "1.2 MB"），直接展示；
@@ -82,14 +120,16 @@ async function load() {
     rows.value = data.list || []
     total.value = data.total || 0
   } catch (e) {
-    MessagePlugin.error(e.message || '加载失败')
+    MessagePlugin.error(e.message || t('common.loadFailed'))
   } finally {
     loading.value = false
   }
 }
+
 function search() {
   page.current = 1
   load()
 }
+
 onMounted(load)
 </script>

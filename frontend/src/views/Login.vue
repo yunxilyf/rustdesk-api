@@ -1,50 +1,127 @@
 <template>
   <div class="login-wrap">
-    <div class="login-card">
-      <img class="login-logo" :src="logo" alt="RustDesk" />
-      <h1 class="login-title">{{ title }}</h1>
-      <p class="login-sub">{{ subtitle }}</p>
-      <t-alert
-        v-if="fromWebClient && !setupMode && !setupPending"
-        theme="info"
-        class="login-web-tip"
-        message="访问网页远控需要先登录，登录成功后将自动进入网页远控。"
-      />
-      <t-form v-if="!setupPending" :data="form" label-width="0" :show-error-message="false" @submit="submit">
-        <t-form-item name="username">
-          <t-input v-model="form.username" size="large" placeholder="用户名" clearable autofocus />
-        </t-form-item>
-        <t-form-item name="password">
-          <t-input v-model="form.password" type="password" size="large" placeholder="密码" @enter="submit" />
-        </t-form-item>
-        <t-form-item v-if="setupMode || registerMode" name="confirm">
-          <t-input v-model="form.confirm" type="password" size="large" placeholder="确认密码" @enter="submit" />
-        </t-form-item>
-        <t-form-item v-if="setupMode" name="setupToken">
-          <t-input v-model="form.setupToken" type="password" size="large" placeholder="部署初始化密钥" />
-        </t-form-item>
-        <t-button theme="primary" type="submit" size="large" block :loading="loading">
-          {{ submitText }}
-        </t-button>
-      </t-form>
-      <div v-if="!setupMode && !setupPending && !registerMode && providers.length" class="login-oauth">
-        <div class="login-or"><span>或使用第三方账号</span></div>
-        <a
-          v-for="p in providers"
-          :key="p.op"
-          class="login-oauth-btn"
-          :class="`oauth-${p.type || 'oidc'}`"
-          :href="oauthHref(p)"
+    <div class="login-theme-float">
+      <t-dropdown :options="langOptions" trigger="click" @click="onLangAction">
+        <t-button
+          variant="outline"
+          shape="circle"
+          aria-label="Language"
+          :title="t('lang.switchTooltip', { label: currentLangLabel })"
         >
-          <span class="login-oauth-icon" aria-hidden="true" v-html="oauthIcon(p.type)"></span>
-          <span class="login-oauth-text" :title="`使用 ${oauthName(p)} 登录`">使用 {{ oauthName(p) }} 登录</span>
-        </a>
+          <template #icon><t-icon name="translate" /></template>
+        </t-button>
+      </t-dropdown>
+      <t-tooltip
+        :content="themeState.resolved === 'dark' ? t('theme.switchToLight') : t('theme.switchToDark')"
+        placement="bottom"
+      >
+        <t-button variant="outline" shape="circle" :aria-label="t('theme.appearance')" @click="toggleQuickTheme">
+          <template #icon>
+            <t-icon :name="themeState.resolved === 'dark' ? 'mode-light' : 'mode-dark'" />
+          </template>
+        </t-button>
+      </t-tooltip>
+    </div>
+
+    <div class="login-shell">
+      <div class="login-brand-panel" aria-hidden="true">
+        <div class="login-brand-top">
+          <div class="login-brand-badge">
+            <t-icon name="desktop" size="14px" />
+            <span>{{ t('login.badge') }}</span>
+          </div>
+          <h2 class="login-brand-heading">
+            {{ t('login.brandHeadingLine1') }}<br />{{ t('login.brandHeadingLine2') }}
+          </h2>
+          <p class="login-brand-desc">{{ t('login.brandDesc') }}</p>
+        </div>
+
+        <ul class="login-brand-features">
+          <li>
+            <span class="login-feature-dot"><t-icon name="server" size="13px" /></span>
+            <span>{{ t('login.feature1') }}</span>
+          </li>
+          <li>
+            <span class="login-feature-dot"><t-icon name="book" size="13px" /></span>
+            <span>{{ t('login.feature2') }}</span>
+          </li>
+          <li>
+            <span class="login-feature-dot"><t-icon name="internet" size="13px" /></span>
+            <span>{{ t('login.feature3') }}</span>
+          </li>
+        </ul>
+
+        <div class="login-brand-foot">{{ t('login.brandFoot') }}</div>
       </div>
-      <div v-if="!setupMode" class="login-switch">
-        <a v-if="!registerMode && allowRegistration" class="login-link" @click="switchMode(true)">没有账号？注册</a>
-        <a v-else-if="registerMode" class="login-link" @click="switchMode(false)">已有账号？返回登录</a>
-        <span v-if="fromWebClient && !registerMode && allowRegistration" class="login-switch-sep">·</span>
-        <a v-if="fromWebClient && !registerMode" class="login-link" @click="goConsoleLogin">仅进入控制台</a>
+
+      <div class="login-card">
+        <img class="login-logo" :src="logo" alt="RustDesk" />
+        <h1 class="login-title">{{ title }}</h1>
+        <p class="login-sub">{{ subtitle }}</p>
+        <t-alert
+          v-if="fromWebClient && !setupMode && !setupPending"
+          theme="info"
+          class="login-web-tip"
+          :message="t('login.webTip')"
+        />
+        <t-form v-if="!setupPending" :data="form" label-width="0" :show-error-message="false" @submit="submit">
+          <t-form-item name="username">
+            <t-input v-model="form.username" size="large" :placeholder="t('login.usernamePlaceholder')" clearable autofocus>
+              <template #prefix-icon><t-icon name="user" /></template>
+            </t-input>
+          </t-form-item>
+          <t-form-item name="password">
+            <t-input
+              v-model="form.password"
+              type="password"
+              size="large"
+              :placeholder="t('login.passwordPlaceholder')"
+              @enter="submit"
+            >
+              <template #prefix-icon><t-icon name="lock-on" /></template>
+            </t-input>
+          </t-form-item>
+          <t-form-item v-if="setupMode || registerMode" name="confirm">
+            <t-input
+              v-model="form.confirm"
+              type="password"
+              size="large"
+              :placeholder="t('login.confirmPlaceholder')"
+              @enter="submit"
+            >
+              <template #prefix-icon><t-icon name="lock-on" /></template>
+            </t-input>
+          </t-form-item>
+          <t-form-item v-if="setupMode" name="setupToken">
+            <t-input v-model="form.setupToken" type="password" size="large" :placeholder="t('login.setupTokenPlaceholder')">
+              <template #prefix-icon><t-icon name="key" /></template>
+            </t-input>
+          </t-form-item>
+          <t-button theme="primary" type="submit" size="large" block :loading="loading">
+            {{ submitText }}
+          </t-button>
+        </t-form>
+        <div v-if="!setupMode && !setupPending && !registerMode && providers.length" class="login-oauth">
+          <div class="login-or"><span>{{ t('login.orOauth') }}</span></div>
+          <a
+            v-for="p in providers"
+            :key="p.op"
+            class="login-oauth-btn"
+            :class="`oauth-${p.type || 'oidc'}`"
+            :href="oauthHref(p)"
+          >
+            <span class="login-oauth-icon" aria-hidden="true" v-html="oauthIcon(p.type)"></span>
+            <span class="login-oauth-text" :title="t('login.oauthBtn', { name: oauthName(p) })">
+              {{ t('login.oauthBtn', { name: oauthName(p) }) }}
+            </span>
+          </a>
+        </div>
+        <div v-if="!setupMode" class="login-switch">
+          <a v-if="!registerMode && allowRegistration" class="login-link" @click="switchMode(true)">{{ t('login.goRegister') }}</a>
+          <a v-else-if="registerMode" class="login-link" @click="switchMode(false)">{{ t('login.goLogin') }}</a>
+          <span v-if="fromWebClient && !registerMode && allowRegistration" class="login-switch-sep">·</span>
+          <a v-if="fromWebClient && !registerMode" class="login-link" @click="goConsoleLogin">{{ t('login.onlyConsole') }}</a>
+        </div>
       </div>
     </div>
   </div>
@@ -57,6 +134,9 @@ import { MessagePlugin } from 'tdesign-vue-next'
 import { api } from '../api'
 import logo from '../assets/logo-128.png'
 import { setUser } from '../store'
+import { setThemeMode, themeState } from '../theme'
+import { LOCALES, i18nState, setLocale, t } from '../i18n'
+import { updatePageTitle } from '../router'
 
 const router = useRouter()
 const route = useRoute()
@@ -68,6 +148,23 @@ const registerMode = ref(false)
 const allowRegistration = ref(false)
 const providers = ref([])
 const fromWebClient = ref(new URLSearchParams(window.location.search).get('next') === '/web/')
+
+const currentLangLabel = computed(() => LOCALES.find((item) => item.value === i18nState.locale)?.label || '简体中文')
+const langOptions = computed(() =>
+  LOCALES.map((item) => ({
+    content: item.label,
+    value: item.value,
+    active: i18nState.locale === item.value,
+  })),
+)
+
+function onLangAction({ value }) {
+  setLocale(value)
+}
+
+function toggleQuickTheme() {
+  setThemeMode(themeState.resolved === 'dark' ? 'light' : 'dark')
+}
 
 const PROVIDER_ICONS = {
   // 官方品牌图标：GitHub 用单色 octocat，Google 用四色 G。
@@ -98,23 +195,23 @@ function oauthHref(provider) {
 }
 
 const title = computed(() => {
-  if (setupMode.value) return '初始化控制台'
-  if (registerMode.value) return '注册账号'
-  if (fromWebClient.value) return 'RustDesk 网页远控'
-  return 'RustDesk 控制台'
+  if (setupMode.value) return t('login.setupTitle')
+  if (registerMode.value) return t('login.registerTitle')
+  if (fromWebClient.value) return t('login.webTitle')
+  return t('login.consoleTitle')
 })
 const subtitle = computed(() => {
-  if (setupMode.value) return '首次使用，请创建第一个管理员账号'
-  if (setupPending.value) return '请在服务端运行 python manage.py ensure_admin，然后刷新此页'
-  if (registerMode.value) return '注册后即可登录控制台（权限由管理员分配）'
-  if (fromWebClient.value) return '与控制台共用账号，登录后无需在网页端重复登录'
-  return '使用管理员或普通用户账号登录'
+  if (setupMode.value) return t('login.setupSub')
+  if (setupPending.value) return t('login.setupPendingSub')
+  if (registerMode.value) return t('login.registerSub')
+  if (fromWebClient.value) return t('login.webSub')
+  return t('login.consoleSub')
 })
 const submitText = computed(() => {
-  if (setupMode.value) return '创建管理员'
-  if (registerMode.value) return '注 册'
-  if (fromWebClient.value) return '登录并进入网页远控'
-  return '登 录'
+  if (setupMode.value) return t('login.submitSetup')
+  if (registerMode.value) return t('login.submitRegister')
+  if (fromWebClient.value) return t('login.submitWeb')
+  return t('login.submitLogin')
 })
 
 function switchMode(toRegister) {
@@ -126,7 +223,7 @@ function switchMode(toRegister) {
 function goConsoleLogin() {
   fromWebClient.value = false
   window.history.replaceState(null, '', '/console/#/login')
-  document.title = '登录 · RustDesk 控制台'
+  updatePageTitle(route)
 }
 
 function goNext() {
@@ -144,18 +241,18 @@ function goNext() {
 
 async function submit() {
   if (!form.username || !form.password) {
-    MessagePlugin.warning('请输入用户名和密码')
+    MessagePlugin.warning(t('login.warnEmpty'))
     return
   }
   loading.value = true
   try {
     if (setupMode.value) {
       if (form.password.length < 8) {
-        MessagePlugin.warning('密码至少 8 位')
+        MessagePlugin.warning(t('login.warnPasswordLen'))
         return
       }
       if (form.password !== form.confirm) {
-        MessagePlugin.warning('两次输入的密码不一致')
+        MessagePlugin.warning(t('login.warnPasswordMismatch'))
         return
       }
       const data = await api.setup({
@@ -164,30 +261,30 @@ async function submit() {
         setup_token: form.setupToken,
       })
       setUser(data.user)
-      MessagePlugin.success('管理员已创建')
+      MessagePlugin.success(t('login.adminCreated'))
       goNext()
       return
     }
     if (registerMode.value) {
       if (form.password.length < 8) {
-        MessagePlugin.warning('密码至少 8 位')
+        MessagePlugin.warning(t('login.warnPasswordLen'))
         return
       }
       if (form.password !== form.confirm) {
-        MessagePlugin.warning('两次输入的密码不一致')
+        MessagePlugin.warning(t('login.warnPasswordMismatch'))
         return
       }
       await api.register({ username: form.username.trim(), password: form.password })
-      MessagePlugin.success('注册成功，请登录')
+      MessagePlugin.success(t('login.registerSuccess'))
       switchMode(false)
       return
     }
     const data = await api.login(form.username.trim(), form.password)
     setUser(data.user)
-    MessagePlugin.success('登录成功')
+    MessagePlugin.success(t('login.loginSuccess'))
     goNext()
   } catch (e) {
-    MessagePlugin.error(e.message || '操作失败')
+    MessagePlugin.error(e.message || t('common.operationFailed'))
   } finally {
     loading.value = false
   }

@@ -7,6 +7,17 @@
     <link rel="manifest" href="/static/console/manifest.webmanifest" />
     <link rel="apple-touch-icon" href="/static/console/apple-touch-icon.png" />
     <title>RustDesk 控制台</title>
+    <script>
+      ;(function () {
+        try {
+          var mode = localStorage.getItem('rd:console_theme') || 'system'
+          var dark =
+            mode === 'dark' ||
+            (mode === 'system' && window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches)
+          document.documentElement.setAttribute('theme-mode', dark ? 'dark' : 'light')
+        } catch (e) {}
+      })()
+    </script>
   </head>
   <body>
     <div id="app"></div>

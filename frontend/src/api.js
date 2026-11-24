@@ -1,3 +1,5 @@
+import { t } from './i18n'
+
 const BASE = '/api/console'
 
 export class ApiError extends Error {
@@ -39,11 +41,11 @@ async function request(method, path, { query, body, silent401 } = {}) {
   try {
     res = await fetch(url, init)
   } catch (e) {
-    throw new ApiError('网络错误', 0)
+    throw new ApiError(t('api.networkError'), 0)
   }
   if (res.status === 401) {
     if (!silent401) window.dispatchEvent(new CustomEvent('console:unauthorized'))
-    throw new ApiError('未登录', 401)
+    throw new ApiError(t('api.unauthorized'), 401)
   }
   let data = {}
   try {
@@ -52,10 +54,10 @@ async function request(method, path, { query, body, silent401 } = {}) {
     data = {}
   }
   if (res.status === 403) {
-    throw new ApiError(data.msg || '无权限', 403)
+    throw new ApiError(data.msg || t('api.forbidden'), 403)
   }
   if (!res.ok || data.ok === false) {
-    throw new ApiError(data.msg || `请求失败 (${res.status})`, res.status)
+    throw new ApiError(data.msg || t('api.requestFailed', { status: res.status }), res.status)
   }
   return data
 }
